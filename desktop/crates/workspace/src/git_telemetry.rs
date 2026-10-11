@@ -103,6 +103,9 @@ pub(crate) fn outcome_report(outcome: &anyhow::Result<RepoCommandOutcome>) -> Ou
     Err(error) if git::is_no_push_target_error(error) => OutcomeReport::Expected {
       reason: "no_push_target",
     },
+    Err(error) if let Some(reason) = git::expected_git_error_reason(error) => {
+      OutcomeReport::Expected { reason }
+    }
     Err(error) => OutcomeReport::Unexpected {
       error: error.to_string(),
     },
@@ -420,6 +423,16 @@ mod tests {
         reason: "no_push_target"
       },
       "a branch without anywhere to push is setup, not a bug to capture"
+    );
+    assert_eq!(
+      outcome_report(&Err(anyhow::Error::new(git::ExpectedGitError::new(
+        "invalid_detached_target",
+        "Detached target must be a commit hash or tag",
+      )))),
+      OutcomeReport::Expected {
+        reason: "invalid_detached_target"
+      },
+      "bad command input is expected and should not be captured"
     );
   }
 

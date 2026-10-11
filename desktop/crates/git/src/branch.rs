@@ -1,4 +1,4 @@
-use std::path::Path;
+use std::{fmt, path::Path};
 
 use anyhow::{Context, Result, bail};
 use git2::build::CheckoutBuilder;
@@ -40,6 +40,41 @@ pub struct StashEntry {
   pub index: usize,
   pub name: String,
   pub oid: String,
+}
+
+#[derive(Debug)]
+pub struct ExpectedGitError {
+  reason: &'static str,
+  message: String,
+}
+
+impl ExpectedGitError {
+  pub fn new(reason: &'static str, message: impl Into<String>) -> Self {
+    Self {
+      reason,
+      message: message.into(),
+    }
+  }
+
+  pub fn reason(&self) -> &'static str {
+    self.reason
+  }
+}
+
+impl fmt::Display for ExpectedGitError {
+  fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+    formatter.write_str(&self.message)
+  }
+}
+
+impl std::error::Error for ExpectedGitError {}
+
+pub fn expected_git_error_reason(error: &anyhow::Error) -> Option<&'static str> {
+  error.chain().find_map(|cause| {
+    cause
+      .downcast_ref::<ExpectedGitError>()
+      .map(|error| error.reason())
+  })
 }
 
 fn repo_signature(repo: &Repository) -> Result<Signature<'static>> {
@@ -707,16 +742,27 @@ pub fn checkout_detached_target(repo_root: &Path, target: &str) -> Result<()> {
     Repository::open(repo_root).with_context(|| format!("open repo at {:?}", repo_root))?;
   let target = target.trim();
   if target.is_empty() {
-    bail!("detached target cannot be empty");
+    return Err(
+      ExpectedGitError::new("invalid_detached_target", "Detached target cannot be empty").into(),
+    );
   }
-  let (object, reference) = repo
-    .revparse_ext(target)
-    .with_context(|| format!("resolve detached target {target:?}"))?;
+  let (object, reference) = repo.revparse_ext(target).map_err(|_| {
+    ExpectedGitError::new(
+      "invalid_detached_target",
+      format!("Could not find commit hash or tag {target}"),
+    )
+  })?;
   if let Some(reference) = reference.as_ref()
     && let Ok(name) = reference.name()
     && (name == "HEAD" || name.starts_with("refs/heads/") || name.starts_with("refs/remotes/"))
   {
-    bail!("detached target must be a commit hash or tag");
+    return Err(
+      ExpectedGitError::new(
+        "invalid_detached_target",
+        "Detached target must be a commit hash or tag",
+      )
+      .into(),
+    );
   }
   let target_commit = object
     .peel_to_commit()
@@ -1314,12 +1360,20 @@ pub fn create_stash(
     .output()
     .context("run git stash push")?;
   if !output.status.success() {
-    bail!(
-      "git stash push failed: {}",
-      String::from_utf8_lossy(&output.stderr).trim()
-    );
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    let message = format!("git stash push failed: {}", stderr.trim());
+    if stash_push_was_rejected_by_repo_policy(&stderr) {
+      return Err(ExpectedGitError::new("stash_rejected", message).into());
+    }
+    return Err(anyhow::anyhow!(message));
   }
   Ok(())
+}
+
+fn stash_push_was_rejected_by_repo_policy(stderr: &str) -> bool {
+  let lower = stderr.to_ascii_lowercase();
+  lower.contains("git stash is disabled")
+    || (lower.contains("refs/stash") && lower.contains("reference-transaction hook"))
 }
 
 pub fn list_stashes(repo_root: &Path) -> Result<Vec<StashEntry>> {
@@ -1400,6 +1454,20 @@ mod tests {
   use crate::test_support::{TempBareRepo, TempDir, TempRepo, commit_text_file};
   use git2::RemoteCallbacks;
   use git2::build::CheckoutBuilder;
+
+  #[cfg(unix)]
+  fn make_executable(path: &Path) {
+    use std::os::unix::fs::PermissionsExt;
+
+    let mut permissions = std::fs::metadata(path)
+      .expect("hook metadata")
+      .permissions();
+    permissions.set_mode(0o755);
+    std::fs::set_permissions(path, permissions).expect("make hook executable");
+  }
+
+  #[cfg(not(unix))]
+  fn make_executable(_path: &Path) {}
 
   fn push_branch_to_remote(repo_root: &Path, branch_name: &str, remote_name: &str) {
     let repo = Repository::open(repo_root).expect("open repo");
@@ -1555,6 +1623,10 @@ mod tests {
       .name;
 
     let error = checkout_detached_target(&repo.path, &branch_name).expect_err("reject branch name");
+    assert_eq!(
+      expected_git_error_reason(&error),
+      Some("invalid_detached_target")
+    );
     assert!(format!("{error:#}").contains("commit hash or tag"));
   }
 
@@ -3324,6 +3396,41 @@ mod tests {
       stash.name.contains("checkpoint before refactor"),
       "stash name should contain custom message, got: {}",
       stash.name
+    );
+  }
+
+  #[test]
+  fn create_stash_rejected_by_repo_policy_is_expected() {
+    let repo = TempRepo::init("branch-stash-rejected-by-policy");
+    let rel_path = Path::new("README.md");
+    let _ = commit_text_file(&repo.path, rel_path, "v1\n", "initial");
+    std::fs::write(repo.path.join(rel_path), "v2\n").expect("write tracked change");
+
+    let hook_path = repo.path.join(".git/hooks/reference-transaction");
+    std::fs::write(
+      &hook_path,
+      r#"#!/bin/sh
+if [ "$1" = prepared ]; then
+  while read old new ref; do
+    if [ "$ref" = refs/stash ]; then
+      echo "git stash is disabled on this clone" >&2
+      exit 1
+    fi
+  done
+fi
+exit 0
+"#,
+    )
+    .expect("write reference transaction hook");
+    make_executable(&hook_path);
+
+    let error = create_stash(&repo.path, false, None).expect_err("stash is rejected");
+
+    assert_eq!(expected_git_error_reason(&error), Some("stash_rejected"));
+    assert!(format!("{error:#}").contains("git stash is disabled"));
+    assert_eq!(
+      std::fs::read_to_string(repo.path.join(rel_path)).expect("read worktree after failed stash"),
+      "v2\n"
     );
   }
 
