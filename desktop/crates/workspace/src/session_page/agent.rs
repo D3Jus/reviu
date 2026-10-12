@@ -570,15 +570,15 @@ impl SessionPage {
   }
 
   /// Keeps the most recent parked panels alive; the rest are dropped, which
-  /// stops their agent process. Running sessions are never evicted.
+  /// stops their agent process. Running sessions and open tabs are never evicted.
   fn evict_parked_chat_panels(&mut self, cx: &mut Context<Self>) {
     const MAX_PARKED_CHAT_PANELS: usize = 5;
-    let visible_chat_ids = self.center_layout_chat_ids();
+    let open_chat_ids = self.open_center_chat_ids();
     let mut kept = 0;
     let mut index = 0;
     while index < self.background_chat_panels.len() {
       let (id, panel) = &self.background_chat_panels[index];
-      if visible_chat_ids.contains(id) || !panel.read(cx).is_parked() {
+      if open_chat_ids.contains(id) || !panel.read(cx).is_parked() {
         index += 1;
         continue;
       }
@@ -4075,21 +4075,30 @@ mod tests {
   async fn parked_panels_beyond_the_cap_are_dropped_oldest_first(cx: &mut TestAppContext) {
     let (_repo, page, cx) = page_with_agent_panel("session-page-eviction", cx).await;
 
+    let mut ids = Vec::new();
     for i in 0..8 {
       let panel = active_panel(&page, cx);
       panel.update(cx, |panel, cx| {
         panel.seed_user_message_for_test(format!("session {i}"), cx)
       });
       cx.run_until_parked();
+      ids.push(panel.read_with(cx, |panel, _| panel.current_conversation().id.clone()));
       page.update_in(cx, |page, window, cx| page.new_session(window, cx));
       cx.run_until_parked();
     }
+
+    page.update_in(cx, |page, window, cx| {
+      for id in &ids {
+        page.close_center_tab(CenterTab::chat_for(id.clone()), window, cx);
+      }
+      page.evict_parked_chat_panels(cx);
+    });
 
     page.read_with(cx, |page, cx| {
       assert_eq!(
         page.background_chat_panels.len(),
         5,
-        "idle panels beyond the cap are dropped"
+        "idle closed panels beyond the cap are dropped"
       );
       let store = page.chat_store.as_ref().expect("store").read(cx);
       assert_eq!(
@@ -6950,6 +6959,30 @@ mod tests {
       assert!(page.chat_panel_for_id(&other_id, cx).is_some());
       let store = page.chat_store.as_ref().expect("store").read(cx);
       assert!(store.list().is_empty(), "blank chats stay out of history");
+    });
+
+    for index in 0..6 {
+      active_panel(&page, cx).update(cx, |panel, cx| {
+        panel.seed_user_message_for_test(format!("message {index}"), cx)
+      });
+      cx.run_until_parked();
+      page.update_in(cx, |page, window, cx| page.new_session(window, cx));
+      cx.run_until_parked();
+    }
+
+    page.update_in(cx, |page, window, cx| {
+      page.activate_center_tab(
+        CenterTab::chat_for(other_id.clone()),
+        OpenIntent::Open,
+        window,
+        cx,
+      )
+    });
+    cx.run_until_parked();
+
+    active_panel(&page, cx).read_with(cx, |panel, _| {
+      assert_eq!(panel.backend_kind(), &other_agent);
+      assert_eq!(panel.current_conversation().id, other_id);
     });
   }
 

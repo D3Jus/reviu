@@ -4,6 +4,10 @@ All notable changes to Reviu are documented here.
 
 ## 1.7.0
 
+### Agent Chat Tabs
+
+Open blank chats now keep their selected agent while they sit in the tab bar, so reopening a Claude draft no longer turns it into a new default-agent chat.
+
 ### Terminal Link Hover
 
 Holding the command/control link modifier over a terminal link now colors and underlines the full link before opening it.
