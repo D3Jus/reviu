@@ -1,4 +1,4 @@
-use agent_client_protocol::schema::{ContentBlock, ToolCallContent};
+use agent_client_protocol::schema::v1::{ContentBlock, ToolCallContent};
 use diff_core::{DiffRowKind, diff_rows, line_diff_counts};
 use syntax::HighlightSpan;
 
@@ -712,7 +712,7 @@ mod tests {
 
   #[test]
   fn extract_outputs_collects_text_content_blocks() {
-    use agent_client_protocol::schema::{
+    use agent_client_protocol::schema::v1::{
       Content as AcpContent, ContentBlock, TextContent, ToolCallContent,
     };
     let content = vec![
@@ -733,7 +733,7 @@ mod tests {
 
   #[test]
   fn extract_outputs_carries_read_start_line() {
-    use agent_client_protocol::schema::{
+    use agent_client_protocol::schema::v1::{
       Content as AcpContent, ContentBlock, TextContent, ToolCallContent,
     };
     let content = vec![ToolCallContent::Content(AcpContent::new(
@@ -748,7 +748,7 @@ mod tests {
 
   #[test]
   fn extract_outputs_strips_cat_numbered_read_text() {
-    use agent_client_protocol::schema::{
+    use agent_client_protocol::schema::v1::{
       Content as AcpContent, ContentBlock, TextContent, ToolCallContent,
     };
     let content = vec![ToolCallContent::Content(AcpContent::new(
@@ -764,7 +764,7 @@ mod tests {
 
   #[test]
   fn extract_outputs_strips_cat_numbered_read_text_without_a_default_line() {
-    use agent_client_protocol::schema::{
+    use agent_client_protocol::schema::v1::{
       Content as AcpContent, ContentBlock, TextContent, ToolCallContent,
     };
     let content = vec![ToolCallContent::Content(AcpContent::new(
@@ -780,7 +780,7 @@ mod tests {
 
   #[test]
   fn extract_outputs_strips_fenced_cat_numbered_read_text() {
-    use agent_client_protocol::schema::{
+    use agent_client_protocol::schema::v1::{
       Content as AcpContent, ContentBlock, TextContent, ToolCallContent,
     };
     let content = vec![ToolCallContent::Content(AcpContent::new(
@@ -798,7 +798,7 @@ mod tests {
 
   #[test]
   fn extract_outputs_keeps_non_contiguous_numbered_text_verbatim() {
-    use agent_client_protocol::schema::{
+    use agent_client_protocol::schema::v1::{
       Content as AcpContent, ContentBlock, TextContent, ToolCallContent,
     };
     let content = vec![ToolCallContent::Content(AcpContent::new(
@@ -814,7 +814,7 @@ mod tests {
 
   #[test]
   fn extract_outputs_only_strips_numbered_text_for_reads() {
-    use agent_client_protocol::schema::{
+    use agent_client_protocol::schema::v1::{
       Content as AcpContent, ContentBlock, TextContent, ToolCallContent,
     };
     let content = vec![ToolCallContent::Content(AcpContent::new(
@@ -895,7 +895,7 @@ mod tests {
 
   #[test]
   fn content_blocks_win_over_raw_output_fallback() {
-    use agent_client_protocol::schema::{
+    use agent_client_protocol::schema::v1::{
       Content as AcpContent, ContentBlock, TextContent, ToolCallContent,
     };
     let content = vec![ToolCallContent::Content(AcpContent::new(
@@ -924,7 +924,7 @@ mod tests {
 
   #[test]
   fn extract_diffs_collects_per_file() {
-    use agent_client_protocol::schema::Diff;
+    use agent_client_protocol::schema::v1::Diff;
     let content = vec![
       ToolCallContent::Diff(Diff::new("foo.rs", "new\n")),
       ToolCallContent::Diff(Diff::new("bar.rs", "after\n").old_text(Some("before\n".to_string()))),

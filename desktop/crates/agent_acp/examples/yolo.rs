@@ -34,7 +34,7 @@ fn main() -> Result<()> {
     smol::spawn(async move {
       while let Ok(event) = events.recv().await {
         if let AgentEvent::AgentMessageChunk(chunk) = &event
-          && let agent_client_protocol::schema::ContentBlock::Text(t) = &chunk.content
+          && let agent_client_protocol::schema::v1::ContentBlock::Text(t) = &chunk.content
         {
           eprint!("{}", t.text);
         }

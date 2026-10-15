@@ -1,5 +1,5 @@
-use agent_acp::{AgentEvent, AgentSession, BackendConfig};
-use agent_client_protocol::schema::{ContentBlock, ModelId, StopReason};
+use agent_acp::{AgentEvent, AgentSession, BackendConfig, ModelId};
+use agent_client_protocol::schema::v1::{ContentBlock, StopReason};
 
 fn stub_backend() -> BackendConfig {
   BackendConfig::new("stub", env!("CARGO_BIN_EXE_stub_agent"), Vec::new())
@@ -127,8 +127,8 @@ fn a_steer_prompt_joins_the_parked_turn() {
     };
     smol::Timer::after(std::time::Duration::from_millis(300)).await;
     let steer =
-      session.steer_prompt_blocks(vec![agent_client_protocol::schema::ContentBlock::Text(
-        agent_client_protocol::schema::TextContent::new("steer now"),
+      session.steer_prompt_blocks(vec![agent_client_protocol::schema::v1::ContentBlock::Text(
+        agent_client_protocol::schema::v1::TextContent::new("steer now"),
       )]);
     let steer_outcome = steer.await.expect("steer resolves");
     assert!(matches!(steer_outcome, agent_acp::SteerOutcome::Injected));

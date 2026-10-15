@@ -1,13 +1,17 @@
 use agent_client_protocol::schema::{
-  AuthMethod, AvailableCommandsUpdate, CancelNotification, ClientCapabilities, ConfigOptionUpdate,
-  ContentBlock, CurrentModeUpdate, FileSystemCapabilities, InitializeRequest, InitializeResponse,
-  LoadSessionRequest, ModelId, ModelInfo, NewSessionRequest, PermissionOption, Plan, PromptRequest,
-  ProtocolVersion, ReadTextFileRequest, ReadTextFileResponse, RequestPermissionOutcome,
-  RequestPermissionRequest, RequestPermissionResponse, SelectedPermissionOutcome, SessionConfigId,
-  SessionConfigOption, SessionConfigOptionValue, SessionId, SessionMode, SessionModeId,
-  SessionUpdate as AcpSessionUpdate, SetSessionConfigOptionRequest, SetSessionModeRequest,
-  SetSessionModelRequest, StopReason, TextContent, ToolCall, ToolCallUpdate, UsageUpdate,
-  WriteTextFileRequest, WriteTextFileResponse,
+  ProtocolVersion,
+  v1::{
+    AuthMethod, AvailableCommandsUpdate, CancelNotification, ClientCapabilities,
+    ConfigOptionUpdate, ContentBlock, CurrentModeUpdate, FileSystemCapabilities, InitializeRequest,
+    InitializeResponse, LoadSessionRequest, NewSessionRequest, PermissionOption, Plan,
+    PromptRequest, ReadTextFileRequest, ReadTextFileResponse, RequestPermissionOutcome,
+    RequestPermissionRequest, RequestPermissionResponse, SelectedPermissionOutcome,
+    SessionConfigId, SessionConfigKind, SessionConfigOption, SessionConfigOptionCategory,
+    SessionConfigOptionValue, SessionConfigSelectOption, SessionConfigSelectOptions,
+    SessionConfigValueId, SessionId, SessionMode, SessionModeId, SessionUpdate as AcpSessionUpdate,
+    SetSessionConfigOptionRequest, SetSessionModeRequest, StopReason, TextContent, ToolCall,
+    ToolCallUpdate, UsageUpdate, WriteTextFileRequest, WriteTextFileResponse,
+  },
 };
 use agent_client_protocol::{Agent, Client, ConnectionTo, Handled, UntypedMessage};
 use anyhow::{Context, Result, anyhow};
@@ -27,20 +31,20 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, Instant};
 pub use terminal::{TerminalSnapshot, TerminalStore};
 
-pub use agent_client_protocol::schema::PermissionOptionKind;
+pub use agent_client_protocol::schema::v1::PermissionOptionKind;
 
 #[derive(Clone, Debug, PartialEq)]
 pub enum AgentEvent {
-  UserMessageChunk(agent_client_protocol::schema::ContentChunk),
-  AgentMessageChunk(agent_client_protocol::schema::ContentChunk),
-  AgentThoughtChunk(agent_client_protocol::schema::ContentChunk),
+  UserMessageChunk(agent_client_protocol::schema::v1::ContentChunk),
+  AgentMessageChunk(agent_client_protocol::schema::v1::ContentChunk),
+  AgentThoughtChunk(agent_client_protocol::schema::v1::ContentChunk),
   ToolCall(ToolCall),
   ToolCallUpdate(ToolCallUpdate),
   Plan(Plan),
   AvailableCommandsUpdate(AvailableCommandsUpdate),
   CurrentModeUpdate(CurrentModeUpdate),
   ConfigOptionUpdate(ConfigOptionUpdate),
-  SessionInfoUpdate(agent_client_protocol::schema::SessionInfoUpdate),
+  SessionInfoUpdate(agent_client_protocol::schema::v1::SessionInfoUpdate),
   UsageUpdate(UsageUpdate),
   CompactionUpdate(CompactionUpdate),
   CompactionSummaryChunk(CompactionSummaryChunk),
@@ -95,9 +99,76 @@ pub struct CompactionSummaryChunk {
   pub compaction_id: String,
   pub content: ContentBlock,
 }
-pub use agent_client_protocol::schema::{
-  ModelId as AcpModelId, ModelInfo as AcpModelInfo, SessionConfigId as AcpSessionConfigId,
-  SessionConfigKind as AcpSessionConfigKind, SessionConfigOption as AcpSessionConfigOption,
+pub type ModelId = SessionConfigValueId;
+
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct ModelInfo {
+  pub model_id: ModelId,
+  pub name: String,
+  pub description: Option<String>,
+}
+
+impl ModelInfo {
+  pub fn new(model_id: impl Into<ModelId>, name: impl Into<String>) -> Self {
+    Self {
+      model_id: model_id.into(),
+      name: name.into(),
+      description: None,
+    }
+  }
+
+  pub fn description(mut self, description: impl Into<String>) -> Self {
+    self.description = Some(description.into());
+    self
+  }
+}
+
+struct ModelConfigState {
+  config_id: SessionConfigId,
+  available_models: Vec<ModelInfo>,
+  current_model_id: ModelId,
+}
+
+fn model_state_from_config_options(options: &[SessionConfigOption]) -> Option<ModelConfigState> {
+  let option = options
+    .iter()
+    .find(|option| matches!(option.category, Some(SessionConfigOptionCategory::Model)))?;
+  let SessionConfigKind::Select(selector) = &option.kind else {
+    return None;
+  };
+  let mut available_models = Vec::new();
+  let mut append_model = |model: &SessionConfigSelectOption| {
+    available_models.push(ModelInfo {
+      model_id: model.value.clone(),
+      name: model.name.clone(),
+      description: model.description.clone(),
+    });
+  };
+  match &selector.options {
+    SessionConfigSelectOptions::Ungrouped(models) => {
+      for model in models {
+        append_model(model);
+      }
+    }
+    SessionConfigSelectOptions::Grouped(groups) => {
+      for group in groups {
+        for model in &group.options {
+          append_model(model);
+        }
+      }
+    }
+    _ => return None,
+  }
+  Some(ModelConfigState {
+    config_id: option.id.clone(),
+    available_models,
+    current_model_id: selector.current_value.clone(),
+  })
+}
+
+pub use agent_client_protocol::schema::v1::{
+  SessionConfigId as AcpSessionConfigId, SessionConfigKind as AcpSessionConfigKind,
+  SessionConfigOption as AcpSessionConfigOption,
   SessionConfigOptionCategory as AcpSessionConfigOptionCategory,
   SessionConfigOptionValue as AcpSessionConfigOptionValue,
   SessionConfigSelect as AcpSessionConfigSelect,
@@ -121,7 +192,7 @@ pub struct PermissionPrompt {
   pub tool_call_title: String,
   /// The full update from the request: kind, raw input, content and locations,
   /// so the card can show what is actually being approved.
-  pub tool_call: agent_client_protocol::schema::ToolCallUpdate,
+  pub tool_call: agent_client_protocol::schema::v1::ToolCallUpdate,
   pub options: Vec<PermissionPromptOption>,
 }
 
@@ -235,7 +306,7 @@ pub enum SteerOutcome {
 const STEER_METHOD: &str = "_session/steering";
 
 /// Agents advertise the steering extension under `_meta.steering.supported`.
-fn parse_steering_support(meta: Option<&agent_client_protocol::schema::Meta>) -> bool {
+fn parse_steering_support(meta: Option<&agent_client_protocol::schema::v1::Meta>) -> bool {
   meta
     .and_then(|meta| meta.get("steering"))
     .and_then(|steering| steering.get("supported"))
@@ -637,31 +708,16 @@ impl Drop for AgentSession {
   }
 }
 
-fn auth_method_id(m: &AuthMethod) -> &str {
-  match m {
-    AuthMethod::EnvVar(x) => x.id.0.as_ref(),
-    AuthMethod::Terminal(x) => x.id.0.as_ref(),
-    AuthMethod::Agent(x) => x.id.0.as_ref(),
-    _ => "",
-  }
+fn auth_method_id(method: &AuthMethod) -> &str {
+  method.id().0.as_ref()
 }
 
-fn auth_method_name(m: &AuthMethod) -> &str {
-  match m {
-    AuthMethod::EnvVar(x) => &x.name,
-    AuthMethod::Terminal(x) => &x.name,
-    AuthMethod::Agent(x) => &x.name,
-    _ => "",
-  }
+fn auth_method_name(method: &AuthMethod) -> &str {
+  method.name()
 }
 
-fn auth_method_description(m: &AuthMethod) -> Option<&str> {
-  match m {
-    AuthMethod::EnvVar(x) => x.description.as_deref(),
-    AuthMethod::Terminal(x) => x.description.as_deref(),
-    AuthMethod::Agent(x) => x.description.as_deref(),
-    _ => None,
-  }
+fn auth_method_description(method: &AuthMethod) -> Option<&str> {
+  method.description()
 }
 
 fn auth_method_terminal_command(m: &AuthMethod) -> Option<TerminalAuthCommand> {
@@ -788,7 +844,7 @@ fn session_update_kind(update: &AgentEvent) -> &'static str {
 
 fn prompt_response_log_label(
   response: &std::result::Result<
-    agent_client_protocol::schema::PromptResponse,
+    agent_client_protocol::schema::v1::PromptResponse,
     agent_client_protocol::Error,
   >,
 ) -> String {
@@ -804,7 +860,7 @@ fn trace_last_session_update(trace: &LastSessionUpdateState) -> Option<LastSessi
 
 fn pick_default_permission_option(
   options: &[PermissionOption],
-) -> Option<agent_client_protocol::schema::PermissionOptionId> {
+) -> Option<agent_client_protocol::schema::v1::PermissionOptionId> {
   let by_kind = |kind: &PermissionOptionKind| {
     options
       .iter()
@@ -1110,7 +1166,7 @@ async fn run_driver(
       agent_client_protocol::on_receive_request!(),
     )
     .on_receive_request(
-      async move |request: agent_client_protocol::schema::CreateTerminalRequest,
+      async move |request: agent_client_protocol::schema::v1::CreateTerminalRequest,
                   responder,
                   _connection| {
         let id = format!("term-{}", terminal_counter.fetch_add(1, Ordering::Relaxed));
@@ -1125,8 +1181,8 @@ async fn run_driver(
           cwd,
           request.output_byte_limit,
         ) {
-          Ok(()) => responder.respond(agent_client_protocol::schema::CreateTerminalResponse::new(
-            agent_client_protocol::schema::TerminalId::new(std::sync::Arc::<str>::from(
+          Ok(()) => responder.respond(agent_client_protocol::schema::v1::CreateTerminalResponse::new(
+            agent_client_protocol::schema::v1::TerminalId::new(std::sync::Arc::<str>::from(
               id.as_str(),
             )),
           )),
@@ -1139,17 +1195,17 @@ async fn run_driver(
       agent_client_protocol::on_receive_request!(),
     )
     .on_receive_request(
-      async move |request: agent_client_protocol::schema::TerminalOutputRequest,
+      async move |request: agent_client_protocol::schema::v1::TerminalOutputRequest,
                   responder,
                   _connection| {
         let id = request.terminal_id.0.as_ref();
         match term_output.snapshot(id).zip(term_output.agent_output(id)) {
           Some((snap, (output, truncated))) => {
             let mut response =
-              agent_client_protocol::schema::TerminalOutputResponse::new(output, truncated);
+              agent_client_protocol::schema::v1::TerminalOutputResponse::new(output, truncated);
             if snap.finished {
               response = response.exit_status(
-                agent_client_protocol::schema::TerminalExitStatus::new()
+                agent_client_protocol::schema::v1::TerminalExitStatus::new()
                   .exit_code(snap.exit_code)
                   .signal(snap.signal),
               );
@@ -1162,7 +1218,7 @@ async fn run_driver(
       agent_client_protocol::on_receive_request!(),
     )
     .on_receive_request(
-      async move |request: agent_client_protocol::schema::WaitForTerminalExitRequest,
+      async move |request: agent_client_protocol::schema::v1::WaitForTerminalExitRequest,
                   responder,
                   connection: ConnectionTo<Agent>| {
         let id = request.terminal_id.0.to_string();
@@ -1174,8 +1230,8 @@ async fn run_driver(
             match store.snapshot(&id) {
               Some(snap) if snap.finished => {
                 break Ok(
-                  agent_client_protocol::schema::WaitForTerminalExitResponse::new(
-                    agent_client_protocol::schema::TerminalExitStatus::new()
+                  agent_client_protocol::schema::v1::WaitForTerminalExitResponse::new(
+                    agent_client_protocol::schema::v1::TerminalExitStatus::new()
                       .exit_code(snap.exit_code)
                       .signal(snap.signal),
                   ),
@@ -1192,20 +1248,20 @@ async fn run_driver(
       agent_client_protocol::on_receive_request!(),
     )
     .on_receive_request(
-      async move |request: agent_client_protocol::schema::KillTerminalRequest,
+      async move |request: agent_client_protocol::schema::v1::KillTerminalRequest,
                   responder,
                   _connection| {
         term_kill.kill(request.terminal_id.0.as_ref());
-        responder.respond(agent_client_protocol::schema::KillTerminalResponse::new())
+        responder.respond(agent_client_protocol::schema::v1::KillTerminalResponse::new())
       },
       agent_client_protocol::on_receive_request!(),
     )
     .on_receive_request(
-      async move |request: agent_client_protocol::schema::ReleaseTerminalRequest,
+      async move |request: agent_client_protocol::schema::v1::ReleaseTerminalRequest,
                   responder,
                   _connection| {
         term_release.release(request.terminal_id.0.as_ref());
-        responder.respond(agent_client_protocol::schema::ReleaseTerminalResponse::new())
+        responder.respond(agent_client_protocol::schema::v1::ReleaseTerminalResponse::new())
       },
       agent_client_protocol::on_receive_request!(),
     )
@@ -1258,7 +1314,7 @@ async fn run_driver(
         current_model_id: None,
         config_options: Vec::new(),
       };
-      let (session_id, modes, models, config_options) = match load_session.clone() {
+      let (session_id, modes, config_options) = match load_session.clone() {
         Some(id) if info.supports_load_session => {
           let sid = SessionId::new(id);
           replaying.store(true, Ordering::Relaxed);
@@ -1268,53 +1324,53 @@ async fn run_driver(
             .await;
           replaying.store(false, Ordering::Relaxed);
           match loaded {
-            Ok(resp) => (sid, resp.modes, resp.models, resp.config_options),
+            Ok(response) => (sid, response.modes, response.config_options),
             // Agents often cannot restore sessions after a restart; fall back to a
             // fresh session instead of failing the whole connection. The local
             // transcript is kept by the host, only provider-side context is lost.
-            Err(e) => {
-              log::warn!("[agent] failed to load saved session, starting fresh: {e}");
-              let resp = connection
+            Err(error) => {
+              log::warn!("[agent] failed to load saved session, starting fresh: {error}");
+              let response = connection
                 .send_request(NewSessionRequest::new(cwd.clone()))
                 .block_task()
                 .await?;
               (
-                resp.session_id,
-                resp.modes,
-                resp.models,
-                resp.config_options,
+                response.session_id,
+                response.modes,
+                response.config_options,
               )
             }
           }
         }
         _ => {
-          let resp = connection
+          let response = connection
             .send_request(NewSessionRequest::new(cwd.clone()))
             .block_task()
             .await?;
           (
-            resp.session_id,
-            resp.modes,
-            resp.models,
-            resp.config_options,
+            response.session_id,
+            response.modes,
+            response.config_options,
           )
         }
       };
       let (available_modes, current_mode_id) = match modes {
-        Some(s) => (s.available_modes, Some(s.current_mode_id)),
+        Some(state) => (state.available_modes, Some(state.current_mode_id)),
         None => (Vec::new(), None),
       };
-      let (available_models, current_model_id) = match models {
-        Some(s) => (s.available_models, Some(s.current_model_id)),
-        None => (Vec::new(), None),
-      };
+      let config_options = config_options.unwrap_or_default();
+      let model_state = model_state_from_config_options(&config_options);
+      let model_config_id = model_state.as_ref().map(|state| state.config_id.clone());
+      let (available_models, current_model_id) = model_state
+        .map(|state| (state.available_models, Some(state.current_model_id)))
+        .unwrap_or_default();
       let info_with_session = AgentInitInfo {
         session_id: Some(session_id.0.to_string()),
         available_modes,
         current_mode_id,
         available_models,
         current_model_id,
-        config_options: config_options.unwrap_or_default(),
+        config_options,
         ..info
       };
 
@@ -1323,11 +1379,11 @@ async fn run_driver(
       use futures::FutureExt;
 
       let map_prompt_response = |response: std::result::Result<
-        agent_client_protocol::schema::PromptResponse,
+        agent_client_protocol::schema::v1::PromptResponse,
         agent_client_protocol::Error,
       >| {
         response.map(|r| r.stop_reason).map_err(|e| {
-          if e.code == agent_client_protocol::schema::ErrorCode::AuthRequired {
+          if e.code == agent_client_protocol::schema::v1::ErrorCode::AuthRequired {
             anyhow!("auth_required: {e}")
           } else {
             anyhow!("acp prompt error: {e}")
@@ -1406,13 +1462,21 @@ async fn run_driver(
                       let _ = set_reply.send(r);
                     }
                     Ok(DriverCmd::SetModel { model_id, reply: set_reply }) => {
-                      let r = connection
-                        .send_request(SetSessionModelRequest::new(session_id.clone(), model_id))
-                        .block_task()
-                        .await
-                        .map(|_| ())
-                        .map_err(|e| anyhow!("set_model: {e}"));
-                      let _ = set_reply.send(r);
+                      let result = if let Some(config_id) = model_config_id.clone() {
+                        connection
+                          .send_request(SetSessionConfigOptionRequest::new(
+                            session_id.clone(),
+                            config_id,
+                            model_id,
+                          ))
+                          .block_task()
+                          .await
+                          .map(|_| ())
+                          .map_err(|error| anyhow!("set_model: {error}"))
+                      } else {
+                        Err(anyhow!("agent does not advertise a model configuration"))
+                      };
+                      let _ = set_reply.send(result);
                     }
                     Ok(DriverCmd::SetConfigOption { config_id, value, reply: set_reply }) => {
                       let r = connection
@@ -1478,13 +1542,21 @@ async fn run_driver(
             let _ = reply.send(r);
           }
           DriverCmd::SetModel { model_id, reply } => {
-            let r = connection
-              .send_request(SetSessionModelRequest::new(session_id.clone(), model_id))
-              .block_task()
-              .await
-              .map(|_| ())
-              .map_err(|e| anyhow!("set_model: {e}"));
-            let _ = reply.send(r);
+            let result = if let Some(config_id) = model_config_id.clone() {
+              connection
+                .send_request(SetSessionConfigOptionRequest::new(
+                  session_id.clone(),
+                  config_id,
+                  model_id,
+                ))
+                .block_task()
+                .await
+                .map(|_| ())
+                .map_err(|error| anyhow!("set_model: {error}"))
+            } else {
+              Err(anyhow!("agent does not advertise a model configuration"))
+            };
+            let _ = reply.send(result);
           }
           DriverCmd::SetConfigOption {
             config_id,
@@ -1518,7 +1590,7 @@ async fn run_driver(
 #[cfg(test)]
 mod tests {
   use super::*;
-  use agent_client_protocol::schema::{PermissionOption, PermissionOptionId};
+  use agent_client_protocol::schema::v1::{PermissionOption, PermissionOptionId};
   use std::fs;
 
   fn opt(id: &str, kind: PermissionOptionKind) -> PermissionOption {
@@ -1527,7 +1599,7 @@ mod tests {
 
   #[test]
   fn session_update_kind_names_updates_for_turn_diagnostics() {
-    use agent_client_protocol::schema::{
+    use agent_client_protocol::schema::v1::{
       ContentChunk, PromptResponse, ToolCall, ToolCallId, ToolCallUpdate, ToolCallUpdateFields,
     };
 
@@ -1712,7 +1784,7 @@ mod tests {
   #[test]
   fn meta_terminal_auth_uses_its_own_command() {
     let method = AuthMethod::Agent(
-      agent_client_protocol::schema::AuthMethodAgent::new("claude-login", "Claude login").meta(
+      agent_client_protocol::schema::v1::AuthMethodAgent::new("claude-login", "Claude login").meta(
         serde_json::json!({
           "terminal-auth": {
             "command": "claude",

@@ -2,7 +2,7 @@ use super::*;
 use crate::diff::DiffLine;
 use crate::persistence::{list_conversations_in, load_conversation_file};
 use agent_acp::PermissionPromptOption;
-use agent_client_protocol::schema::{
+use agent_client_protocol::schema::v1::{
   Cost, Diff, ImageContent, ResourceLink, SessionConfigSelect, SessionConfigSelectOption,
   ToolCallContent, ToolCallLocation, ToolCallUpdateFields, UsageUpdate,
 };
@@ -678,7 +678,7 @@ fn fold_adjacent_chunks_keeps_non_chunk_events_in_place() {
   assert_eq!(folded.len(), 3, "a tool call is an ordering boundary");
 }
 
-fn chunk_text(chunk: &agent_client_protocol::schema::ContentChunk) -> String {
+fn chunk_text(chunk: &agent_client_protocol::schema::v1::ContentChunk) -> String {
   match &chunk.content {
     ContentBlock::Text(t) => t.text.clone(),
     _ => panic!("expected text content"),
@@ -1560,7 +1560,10 @@ async fn a_failed_turn_is_loud_everywhere(cx: &mut gpui::TestAppContext) {
     panel.items.push(agent_message("a real reply"));
     panel.pretend_turn_in_flight_for_test(cx);
     assert!(!panel.last_turn_failed());
-    panel.complete_prompt(Ok(agent_client_protocol::schema::StopReason::EndTurn), cx);
+    panel.complete_prompt(
+      Ok(agent_client_protocol::schema::v1::StopReason::EndTurn),
+      cx,
+    );
   });
   panel.read_with(cx, |panel, _| assert!(!panel.last_turn_failed()));
 }
@@ -1574,7 +1577,10 @@ async fn an_empty_turn_is_reported_even_when_the_adapter_stays_silent(
     // The pi shape: the prompt "succeeds", the turn holds nothing at all.
     panel.items.push(user_message("t la ?"));
     panel.pretend_turn_in_flight_for_test(cx);
-    panel.complete_prompt(Ok(agent_client_protocol::schema::StopReason::EndTurn), cx);
+    panel.complete_prompt(
+      Ok(agent_client_protocol::schema::v1::StopReason::EndTurn),
+      cx,
+    );
   });
   panel.read_with(cx, |panel, _| {
     assert!(panel.last_turn_failed());
@@ -1734,7 +1740,10 @@ async fn a_turn_completing_in_the_background_persists_and_frees_the_gate(
   );
 
   panel.update(cx, |panel, cx| {
-    panel.complete_prompt(Ok(agent_client_protocol::schema::StopReason::EndTurn), cx);
+    panel.complete_prompt(
+      Ok(agent_client_protocol::schema::v1::StopReason::EndTurn),
+      cx,
+    );
   });
   cx.run_until_parked();
 
@@ -1826,7 +1835,10 @@ async fn a_refused_queue_drain_keeps_the_message_queued(cx: &mut gpui::TestAppCo
     panel.queue_prompt_for_test("typed mid-turn", cx);
     panel.pretend_turn_in_flight_for_test(cx);
     // The session died during the turn: the drain's dispatch is refused.
-    panel.complete_prompt(Ok(agent_client_protocol::schema::StopReason::EndTurn), cx);
+    panel.complete_prompt(
+      Ok(agent_client_protocol::schema::v1::StopReason::EndTurn),
+      cx,
+    );
   });
   panel.read_with(cx, |panel, _| {
     assert_eq!(
@@ -2191,7 +2203,9 @@ fn a_read_with_an_offset_numbers_from_the_real_file_line() {
   call.locations = vec![ToolCallLocation::new("src/render.rs")];
   call.raw_input = Some(serde_json::json!({ "offset": 350 }));
   call.content = vec![ToolCallContent::from(
-    agent_client_protocol::schema::ContentBlock::Text(TextContent::new("let a = 1;\nlet b = 2;")),
+    agent_client_protocol::schema::v1::ContentBlock::Text(TextContent::new(
+      "let a = 1;\nlet b = 2;",
+    )),
   )];
   upsert_tool_call_pure(&mut items, &mut index, call, test_cwd());
   let ChatItem::Tool(view) = &items[0] else {
@@ -2211,7 +2225,7 @@ fn a_cat_numbered_read_uses_the_agent_line_numbers_once() {
   call.kind = ToolKind::Read;
   call.locations = vec![ToolCallLocation::new("src/render.rs")];
   call.content = vec![ToolCallContent::from(
-    agent_client_protocol::schema::ContentBlock::Text(TextContent::new(
+    agent_client_protocol::schema::v1::ContentBlock::Text(TextContent::new(
       "   845\tlet a = 1;\n   846\tlet b = 2;",
     )),
   )];
@@ -2236,7 +2250,9 @@ fn read_offset_survives_status_updates_without_raw_input() {
   call.locations = vec![ToolCallLocation::new("src/render.rs")];
   call.raw_input = Some(serde_json::json!({ "offset": 350 }));
   call.content = vec![ToolCallContent::from(
-    agent_client_protocol::schema::ContentBlock::Text(TextContent::new("let a = 1;\nlet b = 2;")),
+    agent_client_protocol::schema::v1::ContentBlock::Text(TextContent::new(
+      "let a = 1;\nlet b = 2;",
+    )),
   )];
   upsert_tool_call_pure(&mut items, &mut index, call, test_cwd());
 
@@ -2255,12 +2271,12 @@ fn read_offset_survives_status_updates_without_raw_input() {
 
 #[test]
 fn tool_call_normalization_preserves_wire_fields() {
-  let mut meta = agent_client_protocol::schema::Meta::new();
+  let mut meta = agent_client_protocol::schema::v1::Meta::new();
   meta.insert("tool_name".into(), serde_json::json!("read_file"));
   let raw_input = serde_json::json!({ "file_path": "src/lib.rs", "offset": 12 });
   let raw_output = serde_json::json!({ "output": "fn main() {}" });
   let content = vec![ToolCallContent::from(
-    agent_client_protocol::schema::ContentBlock::Text(TextContent::new("fn main() {}")),
+    agent_client_protocol::schema::v1::ContentBlock::Text(TextContent::new("fn main() {}")),
   )];
   let mut call = ToolCall::new(ToolCallId::new("read1"), "Read src/lib.rs");
   call.kind = ToolKind::Read;
@@ -2290,7 +2306,7 @@ fn tool_call_normalization_preserves_wire_fields() {
 
 #[test]
 fn tool_update_normalization_keeps_shape_fields_optional() {
-  let mut meta = agent_client_protocol::schema::Meta::new();
+  let mut meta = agent_client_protocol::schema::v1::Meta::new();
   meta.insert("tool_name".into(), serde_json::json!("read_file"));
   let raw_output = serde_json::json!({ "output": "done" });
   let update = ToolCallUpdate::new(
@@ -2317,7 +2333,7 @@ fn tool_update_normalization_keeps_shape_fields_optional() {
 
 #[test]
 fn tool_name_metadata_can_hint_kind_without_parsing_titles() {
-  let mut meta = agent_client_protocol::schema::Meta::new();
+  let mut meta = agent_client_protocol::schema::v1::Meta::new();
   meta.insert("tool_name".into(), serde_json::json!("read_file"));
   let mut call = ToolCall::new(ToolCallId::new("read1"), "Inspecting target");
   call.kind = ToolKind::Other;
@@ -2336,7 +2352,7 @@ fn tool_name_metadata_can_hint_kind_without_parsing_titles() {
 
 #[test]
 fn grok_style_tool_name_metadata_is_captured() {
-  let mut meta = agent_client_protocol::schema::Meta::new();
+  let mut meta = agent_client_protocol::schema::v1::Meta::new();
   meta.insert("x.ai/tool.name".into(), serde_json::json!("shell_exec"));
   let mut call = ToolCall::new(ToolCallId::new("run1"), "Working");
   call.kind = ToolKind::Other;
@@ -2351,7 +2367,7 @@ fn grok_style_tool_name_metadata_is_captured() {
 
 #[test]
 fn tool_name_metadata_does_not_override_explicit_kind() {
-  let mut meta = agent_client_protocol::schema::Meta::new();
+  let mut meta = agent_client_protocol::schema::v1::Meta::new();
   meta.insert("tool_name".into(), serde_json::json!("read_file"));
   let mut call = ToolCall::new(ToolCallId::new("run1"), "Run tests");
   call.kind = ToolKind::Execute;
@@ -2367,7 +2383,7 @@ fn tool_name_metadata_does_not_override_explicit_kind() {
 
 #[test]
 fn tool_name_metadata_alone_is_not_enough_to_change_kind() {
-  let mut meta = agent_client_protocol::schema::Meta::new();
+  let mut meta = agent_client_protocol::schema::v1::Meta::new();
   meta.insert("tool_name".into(), serde_json::json!("read_file"));
   let mut call = ToolCall::new(ToolCallId::new("read1"), "Working");
   call.kind = ToolKind::Other;
@@ -2389,7 +2405,9 @@ fn read_location_update_refreshes_existing_output_line_numbers() {
   call.kind = ToolKind::Read;
   call.locations = vec![ToolCallLocation::new("src/render.rs")];
   call.content = vec![ToolCallContent::from(
-    agent_client_protocol::schema::ContentBlock::Text(TextContent::new("let a = 1;\nlet b = 2;")),
+    agent_client_protocol::schema::v1::ContentBlock::Text(TextContent::new(
+      "let a = 1;\nlet b = 2;",
+    )),
   )];
   upsert_tool_call_pure(&mut items, &mut index, call, test_cwd());
 
@@ -2463,7 +2481,7 @@ fn raw_output_update_does_not_replace_existing_content_preview() {
   let mut call = ToolCall::new(ToolCallId::new("run1"), "Run tests");
   call.kind = ToolKind::Execute;
   call.content = vec![ToolCallContent::from(
-    agent_client_protocol::schema::ContentBlock::Text(TextContent::new("live output")),
+    agent_client_protocol::schema::v1::ContentBlock::Text(TextContent::new("live output")),
   )];
   upsert_tool_call_pure(&mut items, &mut index, call, test_cwd());
 
@@ -3221,7 +3239,7 @@ fn apply_update_replaces_locations() {
 
 #[test]
 fn diff_expansion_defaults_to_collapsed() {
-  use agent_client_protocol::schema::{Diff, ToolCallContent};
+  use agent_client_protocol::schema::v1::{Diff, ToolCallContent};
   let content = vec![ToolCallContent::Diff(
     Diff::new("foo.rs", "new\n").old_text(Some("old\n".to_string())),
   )];
@@ -3257,7 +3275,7 @@ fn session_info_update_sets_title_value_and_null_clears() {
 
 #[test]
 fn plan_view_from_acp_maps_status_and_priority() {
-  use agent_client_protocol::schema::PlanEntry;
+  use agent_client_protocol::schema::v1::PlanEntry;
   let plan = Plan::new(vec![
     PlanEntry::new(
       "do thing",
@@ -3737,7 +3755,7 @@ fn config_customized_is_false_without_a_recorded_default() {
 #[test]
 fn prompt_result_log_label_names_completed_turns() {
   assert_eq!(
-    prompt_result_log_label(&Ok(agent_client_protocol::schema::StopReason::EndTurn)),
+    prompt_result_log_label(&Ok(agent_client_protocol::schema::v1::StopReason::EndTurn)),
     "stop_reason=EndTurn"
   );
 }
@@ -4079,7 +4097,10 @@ async fn model_changes_during_a_turn_are_deferred_until_the_turn_settles(
     );
 
     panel.items.push(agent_message("done"));
-    panel.complete_prompt(Ok(agent_client_protocol::schema::StopReason::EndTurn), cx);
+    panel.complete_prompt(
+      Ok(agent_client_protocol::schema::v1::StopReason::EndTurn),
+      cx,
+    );
     assert!(panel.pending_model_selection.is_none());
   });
 }
@@ -4219,13 +4240,13 @@ async fn agent_code_blocks_are_highlighted_and_copyable(cx: &mut gpui::TestAppCo
 }
 
 fn text_chunk(text: &str) -> AgentEvent {
-  AgentEvent::AgentMessageChunk(agent_client_protocol::schema::ContentChunk::new(
+  AgentEvent::AgentMessageChunk(agent_client_protocol::schema::v1::ContentChunk::new(
     ContentBlock::Text(TextContent::new(text)),
   ))
 }
 
 fn thought_chunk(text: &str) -> AgentEvent {
-  AgentEvent::AgentThoughtChunk(agent_client_protocol::schema::ContentChunk::new(
+  AgentEvent::AgentThoughtChunk(agent_client_protocol::schema::v1::ContentChunk::new(
     ContentBlock::Text(TextContent::new(text)),
   ))
 }
@@ -4345,9 +4366,9 @@ async fn a_tool_update_does_not_split_the_following_prose(cx: &mut gpui::TestApp
 }
 
 fn update_fields(
-  fields: agent_client_protocol::schema::ToolCallUpdateFields,
-) -> agent_client_protocol::schema::ToolCallUpdate {
-  agent_client_protocol::schema::ToolCallUpdate::new(
+  fields: agent_client_protocol::schema::v1::ToolCallUpdateFields,
+) -> agent_client_protocol::schema::v1::ToolCallUpdate {
+  agent_client_protocol::schema::v1::ToolCallUpdate::new(
     ToolCallId::new(std::sync::Arc::from("perm-tool")),
     fields,
   )
@@ -4468,16 +4489,16 @@ fn permission_detail_extracts_the_url_of_a_fetch() {
 
 #[test]
 fn permission_detail_summarizes_an_edit_as_diff_counts() {
-  use agent_client_protocol::schema::Diff;
+  use agent_client_protocol::schema::v1::Diff;
   let update = update_fields(
     ToolCallUpdateFields::new()
       .kind(ToolKind::Edit)
       .content(vec![ToolCallContent::Diff(
         Diff::new("foo.rs", "one\ntwo\n").old_text(Some("one\n".to_string())),
       )])
-      .locations(vec![agent_client_protocol::schema::ToolCallLocation::new(
-        "foo.rs",
-      )]),
+      .locations(vec![
+        agent_client_protocol::schema::v1::ToolCallLocation::new("foo.rs"),
+      ]),
   );
   let detail = permission_detail(&update, test_cwd());
   assert!(detail.invocation.is_none());
@@ -4769,8 +4790,8 @@ fn slash_token_only_opens_the_message() {
   assert_eq!(slash_token_at_cursor("/cmd", 0), None);
 }
 
-fn command(name: &str, description: &str) -> agent_client_protocol::schema::AvailableCommand {
-  agent_client_protocol::schema::AvailableCommand::new(name, description)
+fn command(name: &str, description: &str) -> agent_client_protocol::schema::v1::AvailableCommand {
+  agent_client_protocol::schema::v1::AvailableCommand::new(name, description)
 }
 
 #[gpui::test]
@@ -4981,11 +5002,11 @@ async fn late_chunks_after_a_turn_are_kept_not_dropped(cx: &mut gpui::TestAppCon
 
 #[gpui::test]
 async fn a_plan_updates_in_place_across_interleaved_tool_calls(cx: &mut gpui::TestAppContext) {
-  use agent_client_protocol::schema::{Plan as AcpPlan, PlanEntry, PlanEntryStatus};
+  use agent_client_protocol::schema::v1::{Plan as AcpPlan, PlanEntry, PlanEntryStatus};
   let plan_with = |text: &str, status: PlanEntryStatus| {
     AcpPlan::new(vec![PlanEntry::new(
       text.to_string(),
-      agent_client_protocol::schema::PlanEntryPriority::Medium,
+      agent_client_protocol::schema::v1::PlanEntryPriority::Medium,
       status,
     )])
   };
@@ -5694,7 +5715,7 @@ async fn streaming_chunks_feed_the_incremental_markdown_state(cx: &mut gpui::Tes
 async fn a_resent_tool_call_with_identical_content_keeps_the_expansion(
   cx: &mut gpui::TestAppContext,
 ) {
-  use agent_client_protocol::schema::Diff;
+  use agent_client_protocol::schema::v1::Diff;
   let (panel, cx) = add_panel_window(cx);
   let call_with_diff = || {
     let mut c = call("t1", "Edit foo", ToolKind::Edit);
@@ -5723,7 +5744,7 @@ async fn a_resent_tool_call_with_identical_content_keeps_the_expansion(
 
 #[gpui::test]
 async fn changed_content_or_location_invalidates_the_tool_cache(cx: &mut gpui::TestAppContext) {
-  use agent_client_protocol::schema::{Diff, ToolCallLocation};
+  use agent_client_protocol::schema::v1::{Diff, ToolCallLocation};
   let (panel, cx) = add_panel_window(cx);
   let call_with = |new_text: &str, path: &str| {
     let mut c = call("t1", "Edit foo", ToolKind::Edit);
@@ -5800,7 +5821,7 @@ async fn the_stateful_streaming_view_renders_custom_code_blocks(cx: &mut gpui::T
 
 #[gpui::test]
 async fn a_status_only_update_skips_the_rehighlight(cx: &mut gpui::TestAppContext) {
-  use agent_client_protocol::schema::ToolCallUpdateFields;
+  use agent_client_protocol::schema::v1::ToolCallUpdateFields;
   let (panel, cx) = add_panel_window(cx);
   panel.update(cx, |panel, cx| {
     panel.status = Status::Ready;
@@ -5818,7 +5839,7 @@ async fn a_status_only_update_skips_the_rehighlight(cx: &mut gpui::TestAppContex
       }];
     }
     panel.on_event(
-      AgentEvent::ToolCallUpdate(agent_client_protocol::schema::ToolCallUpdate::new(
+      AgentEvent::ToolCallUpdate(agent_client_protocol::schema::v1::ToolCallUpdate::new(
         ToolCallId::new(std::sync::Arc::from("t1")),
         ToolCallUpdateFields::new().status(ToolCallStatus::Completed),
       )),

@@ -25,10 +25,7 @@
     {
       "description": "ACP is pinned exactly and built on the crate's unstable feature: the spec moves faster than its version numbers. Bump deliberately, never on a bot's schedule.",
       "matchManagers": ["cargo"],
-      "matchPackageNames": [
-        "agent-client-protocol",
-        "agent-client-protocol-schema"
-      ],
+      "matchPackageNames": ["agent-client-protocol"],
       "enabled": false
     },
     {

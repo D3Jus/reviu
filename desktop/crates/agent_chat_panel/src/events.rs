@@ -670,7 +670,7 @@ impl AgentChatPanel {
   /// turn ends and the queue drains.
   pub(crate) fn complete_prompt(
     &mut self,
-    result: anyhow::Result<agent_client_protocol::schema::StopReason>,
+    result: anyhow::Result<agent_client_protocol::schema::v1::StopReason>,
     cx: &mut Context<Self>,
   ) {
     let elapsed_ms = self
@@ -692,7 +692,7 @@ impl AgentChatPanel {
         match result {
           Ok(stop_reason) => {
             panel.auth_required = false;
-            if stop_reason == agent_client_protocol::schema::StopReason::Cancelled {
+            if stop_reason == agent_client_protocol::schema::v1::StopReason::Cancelled {
               // The user asked to stop, not to continue: the queue holds.
               let text = match panel.turn_started_at.map(|t| t.elapsed().as_secs()) {
                 Some(secs) if secs > 0 => format!("Stopped after {secs}s"),

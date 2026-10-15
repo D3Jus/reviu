@@ -1,4 +1,4 @@
-use agent_client_protocol::schema::{
+use agent_client_protocol::schema::v1::{
   Meta, ToolCall, ToolCallContent, ToolCallId, ToolCallStatus, ToolCallUpdate, ToolKind,
 };
 use std::path::PathBuf;
@@ -94,7 +94,7 @@ impl From<ToolCallUpdate> for NormalizedToolCallUpdate {
 }
 
 pub(crate) fn normalize_locations(
-  locations: Vec<agent_client_protocol::schema::ToolCallLocation>,
+  locations: Vec<agent_client_protocol::schema::v1::ToolCallLocation>,
 ) -> Vec<(PathBuf, Option<u32>)> {
   locations
     .into_iter()

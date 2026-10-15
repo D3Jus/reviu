@@ -172,8 +172,7 @@ agent_chat_panel = { path = "crates/agent_chat_panel" }
 selectable_text = { path = "crates/selectable_text" }
 
 # ACP integration
-agent-client-protocol = { version = "=0.11.1", features = ["unstable"] }
-agent-client-protocol-schema = { version = "=0.14.0", features = ["unstable"] }
+agent-client-protocol = { version = "=2.2.0", features = ["unstable"] }
 async-channel = "2.5.0"
 async-process = "2.5.0"
 futures = "0.3.34"

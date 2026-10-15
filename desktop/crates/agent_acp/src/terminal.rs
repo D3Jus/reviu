@@ -262,9 +262,9 @@ impl TerminalStore {
 /// carry output, `terminal_exit` closes it.
 pub(crate) fn inspect_session_update(
   store: &Arc<TerminalStore>,
-  update: &agent_client_protocol::schema::SessionUpdate,
+  update: &agent_client_protocol::schema::v1::SessionUpdate,
 ) {
-  use agent_client_protocol::schema::SessionUpdate;
+  use agent_client_protocol::schema::v1::SessionUpdate;
   let meta = match update {
     SessionUpdate::ToolCall(call) => call.meta.as_ref(),
     SessionUpdate::ToolCallUpdate(update) => update.meta.as_ref(),
@@ -487,7 +487,7 @@ fn program_reading_no_input(
 #[cfg(test)]
 mod tests {
   use super::*;
-  use agent_client_protocol::schema::{
+  use agent_client_protocol::schema::v1::{
     SessionUpdate, ToolCallId, ToolCallUpdate, ToolCallUpdateFields,
   };
 

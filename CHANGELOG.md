@@ -4,6 +4,10 @@ All notable changes to Reviu are documented here.
 
 ## 1.7.0
 
+### Safer Agent Sessions
+
+Agent sessions now use the newer ACP runtime and standardized model configuration, improving compatibility with current coding agents while removing the outdated MCP dependency from Reviu.
+
 ### Agent Chat Tabs
 
 Open blank chats now keep their selected agent while they sit in the tab bar, so reopening a Claude draft no longer turns it into a new default-agent chat.

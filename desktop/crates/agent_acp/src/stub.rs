@@ -3,35 +3,44 @@
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use agent_client_protocol::schema::{
+use agent_client_protocol::schema::v1::{
   AgentCapabilities, CancelNotification, ContentBlock, Diff, Implementation, InitializeRequest,
-  InitializeResponse, ModelId, ModelInfo, NewSessionRequest, NewSessionResponse, PermissionOption,
-  PermissionOptionKind, PromptRequest, PromptResponse, RequestPermissionRequest, SessionId,
-  SessionModelState, SessionNotification, SessionUpdate, SetSessionModelRequest,
-  SetSessionModelResponse, StopReason, TextContent, ToolCall, ToolCallContent, ToolCallId,
+  InitializeResponse, NewSessionRequest, NewSessionResponse, PermissionOption,
+  PermissionOptionKind, PromptRequest, PromptResponse, RequestPermissionRequest,
+  SessionConfigOption, SessionConfigOptionCategory, SessionConfigSelectOption, SessionId,
+  SessionNotification, SessionUpdate, SetSessionConfigOptionRequest,
+  SetSessionConfigOptionResponse, StopReason, TextContent, ToolCall, ToolCallContent, ToolCallId,
   ToolCallStatus, ToolCallUpdate, ToolCallUpdateFields, ToolKind,
 };
 use agent_client_protocol::{Agent, Client, ConnectionTo, Dispatch, Responder};
 use smol::Unblock;
 
-fn stub_models() -> Vec<ModelInfo> {
-  vec![
-    ModelInfo::new(ModelId::new("stub-small"), "Stub Small"),
-    ModelInfo::new(ModelId::new("stub-large"), "Stub Large"),
-  ]
+const MODEL_CONFIG_ID: &str = "model";
+
+fn stub_model_config(current_model: impl Into<String>) -> SessionConfigOption {
+  SessionConfigOption::select(
+    MODEL_CONFIG_ID,
+    "Model",
+    current_model.into(),
+    vec![
+      SessionConfigSelectOption::new("stub-small", "Stub Small"),
+      SessionConfigSelectOption::new("stub-large", "Stub Large"),
+    ],
+  )
+  .category(SessionConfigOptionCategory::Model)
 }
 
 /// A thought chunk then the "ack" reply, closing the turn's notifications.
 fn finish_turn(cx: &ConnectionTo<Client>, session_id: SessionId) {
   let _ = cx.send_notification(SessionNotification::new(
     session_id.clone(),
-    SessionUpdate::AgentThoughtChunk(agent_client_protocol::schema::ContentChunk::new(
+    SessionUpdate::AgentThoughtChunk(agent_client_protocol::schema::v1::ContentChunk::new(
       ContentBlock::Text(TextContent::new("stub thinking")),
     )),
   ));
   let _ = cx.send_notification(SessionNotification::new(
     session_id,
-    SessionUpdate::AgentMessageChunk(agent_client_protocol::schema::ContentChunk::new(
+    SessionUpdate::AgentMessageChunk(agent_client_protocol::schema::v1::ContentChunk::new(
       ContentBlock::Text(TextContent::new("ack")),
     )),
   ));
@@ -50,6 +59,7 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
     let waiting_for_cancel = waiting.clone();
     let waiting_for_steer = waiting.clone();
     let current_model = Arc::new(Mutex::new("stub-small".to_string()));
+    let model_for_load_session = current_model.clone();
     let model_for_new_session = current_model.clone();
     let model_for_prompt = current_model.clone();
     let model_for_set = current_model.clone();
@@ -78,7 +88,7 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
               AgentCapabilities::new()
                 .load_session(true)
                 .prompt_capabilities(
-                  agent_client_protocol::schema::PromptCapabilities::new().image(true),
+                  agent_client_protocol::schema::v1::PromptCapabilities::new().image(true),
                 ),
             )
             .agent_info(Implementation::new("stub-agent", "0.0.1"));
@@ -90,7 +100,7 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
         agent_client_protocol::on_receive_request!(),
       )
       .on_receive_request(
-        async move |req: agent_client_protocol::schema::LoadSessionRequest,
+        async move |req: agent_client_protocol::schema::v1::LoadSessionRequest,
                     responder,
                     cx: ConnectionTo<Client>| {
           // Only the session this stub ever creates can be loaded; an unknown
@@ -103,17 +113,24 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
           let session_id = req.session_id.clone();
           let _ = cx.send_notification(SessionNotification::new(
             session_id.clone(),
-            SessionUpdate::AgentThoughtChunk(agent_client_protocol::schema::ContentChunk::new(
+            SessionUpdate::AgentThoughtChunk(agent_client_protocol::schema::v1::ContentChunk::new(
               ContentBlock::Text(TextContent::new("stub thinking")),
             )),
           ));
           let _ = cx.send_notification(SessionNotification::new(
             session_id,
-            SessionUpdate::AgentMessageChunk(agent_client_protocol::schema::ContentChunk::new(
+            SessionUpdate::AgentMessageChunk(agent_client_protocol::schema::v1::ContentChunk::new(
               ContentBlock::Text(TextContent::new("ack")),
             )),
           ));
-          responder.respond(agent_client_protocol::schema::LoadSessionResponse::new())
+          let current_model = model_for_load_session
+            .lock()
+            .expect("current model")
+            .clone();
+          responder.respond(
+            agent_client_protocol::schema::v1::LoadSessionResponse::new()
+              .config_options(vec![stub_model_config(current_model)]),
+          )
         },
         agent_client_protocol::on_receive_request!(),
       )
@@ -121,18 +138,19 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
         async move |_req: NewSessionRequest, responder, cx: ConnectionTo<Client>| {
           let session_id = SessionId::new("stub-session");
           let current_model = model_for_new_session.lock().expect("current model").clone();
-          let result = responder.respond(NewSessionResponse::new(session_id.clone()).models(
-            SessionModelState::new(ModelId::new(current_model), stub_models()),
-          ));
+          let result = responder.respond(
+            NewSessionResponse::new(session_id.clone())
+              .config_options(vec![stub_model_config(current_model)]),
+          );
           let _ = cx.send_notification(SessionNotification::new(
             session_id,
             SessionUpdate::AvailableCommandsUpdate(
-              agent_client_protocol::schema::AvailableCommandsUpdate::new(vec![
-                agent_client_protocol::schema::AvailableCommand::new(
+              agent_client_protocol::schema::v1::AvailableCommandsUpdate::new(vec![
+                agent_client_protocol::schema::v1::AvailableCommand::new(
                   "compact",
                   "Compact the conversation",
                 ),
-                agent_client_protocol::schema::AvailableCommand::new(
+                agent_client_protocol::schema::v1::AvailableCommand::new(
                   "review",
                   "Review the changes",
                 ),
@@ -144,9 +162,20 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
         agent_client_protocol::on_receive_request!(),
       )
       .on_receive_request(
-        async move |req: SetSessionModelRequest, responder, _: ConnectionTo<Client>| {
-          *model_for_set.lock().expect("current model") = req.model_id.0.to_string();
-          responder.respond(SetSessionModelResponse::new())
+        async move |request: SetSessionConfigOptionRequest,
+                    responder,
+                    _: ConnectionTo<Client>| {
+          if request.config_id.0.as_ref() != MODEL_CONFIG_ID {
+            return responder.respond_with_error(agent_client_protocol::Error::invalid_params());
+          }
+          let Some(model_id) = request.value.as_value_id() else {
+            return responder.respond_with_error(agent_client_protocol::Error::invalid_params());
+          };
+          let model_id = model_id.0.to_string();
+          *model_for_set.lock().expect("current model") = model_id.clone();
+          responder.respond(SetSessionConfigOptionResponse::new(vec![
+            stub_model_config(model_id),
+          ]))
         },
         agent_client_protocol::on_receive_request!(),
       )
@@ -168,7 +197,7 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
           {
             let _ = cx.send_notification(SessionNotification::new(
               session_id.clone(),
-              SessionUpdate::AgentMessageChunk(agent_client_protocol::schema::ContentChunk::new(
+              SessionUpdate::AgentMessageChunk(agent_client_protocol::schema::v1::ContentChunk::new(
                 ContentBlock::Text(TextContent::new("image received")),
               )),
             ));
@@ -177,7 +206,7 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
             let model = model_for_prompt.lock().expect("current model").clone();
             let _ = cx.send_notification(SessionNotification::new(
               session_id.clone(),
-              SessionUpdate::AgentMessageChunk(agent_client_protocol::schema::ContentChunk::new(
+              SessionUpdate::AgentMessageChunk(agent_client_protocol::schema::v1::ContentChunk::new(
                 ContentBlock::Text(TextContent::new(format!("model: {model}"))),
               )),
             ));
@@ -209,7 +238,7 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
                 let _ = cx.send_notification(SessionNotification::new(
                   session_id.clone(),
                   SessionUpdate::AgentMessageChunk(
-                    agent_client_protocol::schema::ContentChunk::new(ContentBlock::Text(
+                    agent_client_protocol::schema::v1::ContentChunk::new(ContentBlock::Text(
                       TextContent::new(text),
                     )),
                   ),
@@ -263,8 +292,8 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
             call.kind = ToolKind::Execute;
             call.status = ToolCallStatus::InProgress;
             call.content = vec![ToolCallContent::Terminal(
-              agent_client_protocol::schema::Terminal::new(
-                agent_client_protocol::schema::TerminalId::new("codex-item-1"),
+              agent_client_protocol::schema::v1::Terminal::new(
+                agent_client_protocol::schema::v1::TerminalId::new("codex-item-1"),
               ),
             )];
             call.meta = meta_info.as_object().cloned();
@@ -309,7 +338,7 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
             smol::spawn(async move {
               let create = |script: &str| {
                 cx.send_request(
-                  agent_client_protocol::schema::CreateTerminalRequest::new(
+                  agent_client_protocol::schema::v1::CreateTerminalRequest::new(
                     session_id.clone(),
                     "/bin/sh",
                   )
@@ -317,9 +346,9 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
                 )
                 .block_task()
               };
-              let wait_for_exit = |terminal_id: &agent_client_protocol::schema::TerminalId| {
+              let wait_for_exit = |terminal_id: &agent_client_protocol::schema::v1::TerminalId| {
                 cx.send_request(
-                  agent_client_protocol::schema::WaitForTerminalExitRequest::new(
+                  agent_client_protocol::schema::v1::WaitForTerminalExitRequest::new(
                     session_id.clone(),
                     terminal_id.clone(),
                   ),
@@ -339,7 +368,7 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
                 Err(_) => false,
               };
               let output_ok = cx
-                .send_request(agent_client_protocol::schema::TerminalOutputRequest::new(
+                .send_request(agent_client_protocol::schema::v1::TerminalOutputRequest::new(
                   session_id.clone(),
                   long.terminal_id.clone(),
                 ))
@@ -347,7 +376,7 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
                 .await
                 .is_ok();
               let _ = cx
-                .send_request(agent_client_protocol::schema::KillTerminalRequest::new(
+                .send_request(agent_client_protocol::schema::v1::KillTerminalRequest::new(
                   session_id.clone(),
                   long.terminal_id.clone(),
                 ))
@@ -381,7 +410,7 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
             smol::spawn(async move {
               let created = cx
                 .send_request(
-                  agent_client_protocol::schema::CreateTerminalRequest::new(
+                  agent_client_protocol::schema::v1::CreateTerminalRequest::new(
                     session_id.clone(),
                     "/bin/sh",
                   )
@@ -400,7 +429,7 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
               call.kind = ToolKind::Execute;
               call.status = ToolCallStatus::InProgress;
               call.content = vec![ToolCallContent::Terminal(
-                agent_client_protocol::schema::Terminal::new(terminal_id.clone()),
+                agent_client_protocol::schema::v1::Terminal::new(terminal_id.clone()),
               )];
               let _ = cx.send_notification(SessionNotification::new(
                 session_id.clone(),
@@ -408,7 +437,7 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
               ));
               let exit = cx
                 .send_request(
-                  agent_client_protocol::schema::WaitForTerminalExitRequest::new(
+                  agent_client_protocol::schema::v1::WaitForTerminalExitRequest::new(
                     session_id.clone(),
                     terminal_id.clone(),
                   ),
@@ -420,7 +449,7 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
                 Err(_) => true,
               };
               let _ = cx
-                .send_request(agent_client_protocol::schema::ReleaseTerminalRequest::new(
+                .send_request(agent_client_protocol::schema::v1::ReleaseTerminalRequest::new(
                   session_id.clone(),
                   terminal_id.clone(),
                 ))
@@ -464,7 +493,7 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
           if prompt_contains("wait") {
             let _ = cx.send_notification(SessionNotification::new(
               session_id.clone(),
-              SessionUpdate::AgentMessageChunk(agent_client_protocol::schema::ContentChunk::new(
+              SessionUpdate::AgentMessageChunk(agent_client_protocol::schema::v1::ContentChunk::new(
                 ContentBlock::Text(TextContent::new("partial reply")),
               )),
             ));
@@ -516,7 +545,7 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
           // Responses to requests this stub sent (e.g. request_permission)
           // route to their waiting task.
           if let Dispatch::Response(result, router) = message {
-            return router.respond_with_result(result);
+            return router.route_with_result(result);
           }
           // The steering extension: injects into a parked turn ("wait"),
           // errors on "fail", asks for a plain prompt when nothing runs.
@@ -564,7 +593,7 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
               };
               let _ = cx.send_notification(SessionNotification::new(
                 SessionId::new(std::sync::Arc::<str>::from(session_id.as_str())),
-                SessionUpdate::AgentMessageChunk(agent_client_protocol::schema::ContentChunk::new(
+                SessionUpdate::AgentMessageChunk(agent_client_protocol::schema::v1::ContentChunk::new(
                   ContentBlock::Text(TextContent::new("steered reply")),
                 )),
               ));

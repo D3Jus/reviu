@@ -70,9 +70,9 @@ async fn a_prompt_round_trips_through_a_real_agent_process(cx: &mut TestAppConte
 }
 
 fn late_text_chunk(text: &str) -> agent_acp::AgentEvent {
-  agent_acp::AgentEvent::AgentMessageChunk(agent_client_protocol::schema::ContentChunk::new(
-    agent_client_protocol::schema::ContentBlock::Text(
-      agent_client_protocol::schema::TextContent::new(text),
+  agent_acp::AgentEvent::AgentMessageChunk(agent_client_protocol::schema::v1::ContentChunk::new(
+    agent_client_protocol::schema::v1::ContentBlock::Text(
+      agent_client_protocol::schema::v1::TextContent::new(text),
     ),
   ))
 }

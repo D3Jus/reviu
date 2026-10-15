@@ -72,7 +72,7 @@ pub(crate) async fn build_prompt_blocks(
   for image in images {
     let data = base64::engine::general_purpose::STANDARD.encode(&image.bytes);
     blocks.push(ContentBlock::Image(
-      agent_client_protocol::schema::ImageContent::new(data, image.format.mime_type()),
+      agent_client_protocol::schema::v1::ImageContent::new(data, image.format.mime_type()),
     ));
   }
 

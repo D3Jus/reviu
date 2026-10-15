@@ -38,17 +38,17 @@ use crate::store::SaveRequest;
 
 use agent_acp::{
   AgentEvent, AgentSession, AuthMethodInfo, BackendAvailability, BackendConfig, CompactionPatch,
-  CompactionStatus, CompactionUpdate, PermissionOptionKind, PermissionPrompt,
+  CompactionStatus, CompactionUpdate, ModelId, ModelInfo, PermissionOptionKind, PermissionPrompt,
 };
-use agent_client_protocol::schema::{
+use agent_client_protocol::schema::v1::{
   ContentBlock, EmbeddedResource, EmbeddedResourceResource, Plan, PlanEntryPriority,
   PlanEntryStatus, ResourceLink, SessionInfoUpdate, TextContent, TextResourceContents, ToolCall,
   ToolCallContent, ToolCallId, ToolCallStatus, ToolCallUpdate, ToolKind, UsageUpdate,
 };
-use agent_client_protocol::schema::{
-  ModelId, ModelInfo, SessionConfigId, SessionConfigKind, SessionConfigOption,
-  SessionConfigOptionCategory, SessionConfigOptionValue, SessionConfigSelectOptions,
-  SessionConfigValueId, SessionMode, SessionModeId,
+use agent_client_protocol::schema::v1::{
+  SessionConfigId, SessionConfigKind, SessionConfigOption, SessionConfigOptionCategory,
+  SessionConfigOptionValue, SessionConfigSelectOptions, SessionConfigValueId, SessionMode,
+  SessionModeId,
 };
 use agent_registry::{AgentId, Registry, RegistryAgent};
 use diff_core::NO_NEWLINE_MARKER_TEXT;
@@ -189,7 +189,7 @@ fn working_word_seed(conversation_id: &str) -> u64 {
 }
 
 fn prompt_result_log_label(
-  result: &anyhow::Result<agent_client_protocol::schema::StopReason>,
+  result: &anyhow::Result<agent_client_protocol::schema::v1::StopReason>,
 ) -> String {
   match result {
     Ok(stop_reason) => format!("stop_reason={stop_reason:?}"),
@@ -389,7 +389,7 @@ fn fill_tool_update_read_snapshot(
 }
 
 fn permission_detail(
-  update: &agent_client_protocol::schema::ToolCallUpdate,
+  update: &agent_client_protocol::schema::v1::ToolCallUpdate,
   cwd: &std::path::Path,
 ) -> PermissionDetail {
   let fields = &update.fields;
@@ -970,7 +970,7 @@ pub struct AgentChatPanel {
   /// Same deferral for persisting the reading position.
   scroll_save_pending: bool,
   /// Slash commands advertised by the agent, latest update wins.
-  available_commands: Vec<agent_client_protocol::schema::AvailableCommand>,
+  available_commands: Vec<agent_client_protocol::schema::v1::AvailableCommand>,
   /// Item index of the user message being edited, with its inline editor.
   editing_message: Option<usize>,
   edit_input: Option<Entity<TextareaState>>,
@@ -1510,9 +1510,9 @@ impl AgentChatPanel {
   /// Park the conversation on an unanswered permission card.
   #[cfg(any(test, feature = "test-support"))]
   pub fn seed_unresolved_permission_for_test(&mut self, cx: &mut Context<Self>) {
-    let update = agent_client_protocol::schema::ToolCallUpdate::new(
+    let update = agent_client_protocol::schema::v1::ToolCallUpdate::new(
       ToolCallId::new(std::sync::Arc::from("test-permission")),
-      agent_client_protocol::schema::ToolCallUpdateFields::new().kind(ToolKind::Execute),
+      agent_client_protocol::schema::v1::ToolCallUpdateFields::new().kind(ToolKind::Execute),
     );
     self
       .items
@@ -2756,7 +2756,10 @@ impl AgentChatPanel {
   fn slash_snapshot(
     &self,
     cx: &App,
-  ) -> Option<(String, Vec<agent_client_protocol::schema::AvailableCommand>)> {
+  ) -> Option<(
+    String,
+    Vec<agent_client_protocol::schema::v1::AvailableCommand>,
+  )> {
     if self.available_commands.is_empty() {
       return None;
     }

@@ -1,7 +1,7 @@
 //! Pure functions over the transcript: turns, tool calls, checkpoints.
 
 use super::*;
-use agent_client_protocol::schema::ToolCallContent;
+use agent_client_protocol::schema::v1::ToolCallContent;
 
 /// The marker goes right before the prompt that triggered it (the last user-authored
 /// message), so a rollback lands on the state that preceded that prompt.
