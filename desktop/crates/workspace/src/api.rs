@@ -6,6 +6,7 @@ use std::fmt;
 use std::sync::{Arc, Mutex};
 
 use crate::AppProfile;
+use crate::app_update::resolved_build_version;
 use crate::crash_report::StartupCrashReport;
 use crate::sentry_context;
 
@@ -526,6 +527,8 @@ struct SubmitFeedbackRequest<'a> {
   feedback_type: &'a str,
   title: &'a str,
   description: &'a str,
+  #[serde(rename = "appVersion")]
+  app_version: String,
 }
 
 #[derive(Debug, Deserialize)]
@@ -841,6 +844,7 @@ impl ApiClient {
         feedback_type,
         title,
         description,
+        app_version: resolved_build_version(env!("CARGO_PKG_VERSION")),
       })
       .send()?;
     let status = response.status();
@@ -1919,6 +1923,32 @@ mod tests {
       .get(AUTHORIZATION)
       .and_then(|value| value.to_str().ok());
     assert_eq!(authorization, Some("Bearer secret-token"));
+  }
+
+  #[test]
+  fn submit_feedback_sends_the_app_version() {
+    let (base_url, request, handle) =
+      start_single_response_server_with_request("201 Created", r#"{"issueId":"1"}"#);
+    let api = make_test_api_client(base_url);
+
+    api
+      .submit_feedback("bug", "Diff is empty", "After a rebase")
+      .expect("submit feedback");
+
+    handle.join().expect("join server thread");
+    let request = request
+      .lock()
+      .expect("lock request")
+      .clone()
+      .unwrap_or_default();
+    assert!(request.contains("POST /feedback "), "request: {request}");
+    assert!(
+      request.contains(&format!(
+        "\"appVersion\":\"{}\"",
+        resolved_build_version(env!("CARGO_PKG_VERSION"))
+      )),
+      "request: {request}"
+    );
   }
 
   #[test]
