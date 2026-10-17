@@ -4,6 +4,10 @@ All notable changes to Reviu are documented here.
 
 ## 1.7.0
 
+### Reliable Pi Recovery
+
+When Pi unexpectedly ends a turn without replying, Reviu now restarts its connection instead of retrying the same message forever against a dead session.
+
 ### Safer Agent Sessions
 
 Agent sessions now use the newer ACP runtime and standardized model configuration, improving compatibility with current coding agents while removing the outdated MCP dependency from Reviu.

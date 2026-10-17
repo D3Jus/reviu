@@ -1588,6 +1588,11 @@ async fn an_empty_turn_is_reported_even_when_the_adapter_stays_silent(
       panic!("message expected");
     };
     assert!(m.text.contains("without a reply"), "{}", m.text);
+    assert!(
+      panel.queued_prompts.is_empty(),
+      "an unexplained empty turn must not be mistaken for a quota error and retried forever"
+    );
+    assert!(panel._retry_task.is_none());
   });
 }
 

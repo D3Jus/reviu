@@ -689,6 +689,7 @@ impl AgentChatPanel {
         panel.append_turn_summary();
         // A turn that ran to the end: not stopped by the user, not failed.
         let mut completed = false;
+        let mut reconnect_after_empty_turn = false;
         match result {
           Ok(stop_reason) => {
             panel.auth_required = false;
@@ -704,36 +705,26 @@ impl AgentChatPanel {
                 images: 0,
                 image_data: Vec::new(),
               }));
+            } else if !turn_produced_reply(&panel.items) {
+              let reconnecting = panel.backend_kind.as_str() == "pi-acp";
+              let message = if reconnecting {
+                "Pi ended the turn without a reply. Reviu is restarting the Pi connection; resend the message once it reconnects."
+              } else {
+                "The agent ended the turn without a reply. Its provider or adapter may have refused it without reporting an error."
+              };
+              panel.last_turn_failed = true;
+              reconnect_after_empty_turn = reconnecting;
+              cx.emit(AgentChatPanelEvent::TurnFailed {
+                message: message.to_string(),
+              });
+              panel.items.push(ChatItem::Message(ChatMessage {
+                role: ChatRole::System,
+                text: format!("[error] {message}").into(),
+                images: 0,
+                image_data: Vec::new(),
+              }));
             } else {
               completed = true;
-              // The pi-style silent failure: the provider refused (credits,
-              // limits) but the adapter ended the turn cleanly with nothing
-              // in it. Whatever the adapter hides, an empty turn is loud.
-              if !turn_produced_reply(&panel.items) {
-                let message = "The agent ended the turn without a reply. \
-Its provider may have refused it (credits, usage limit) without reporting an error.";
-                let retry_note = panel.prepare_retry_after_hint(
-                  RetryHint {
-                    reason: RetryReason::QuotaExhausted,
-                    retry_after: None,
-                  },
-                  cx,
-                );
-                let note_suffix = retry_note
-                  .as_ref()
-                  .map(|note| format!("\n{note}"))
-                  .unwrap_or_default();
-                panel.last_turn_failed = true;
-                cx.emit(AgentChatPanelEvent::TurnFailed {
-                  message: message.to_string(),
-                });
-                panel.items.push(ChatItem::Message(ChatMessage {
-                  role: ChatRole::System,
-                  text: format!("[error] {message}{note_suffix}").into(),
-                  images: 0,
-                  image_data: Vec::new(),
-                }));
-              }
             }
           }
           Err(e) => {
@@ -841,6 +832,9 @@ Its provider may have refused it (credits, usage limit) without reporting an err
         panel.sync_list_count();
         cx.emit(AgentChatPanelEvent::TurnFinished { completed });
         panel.refresh_project_files(cx);
+        if reconnect_after_empty_turn {
+          panel.respawn_session(cx);
+        }
         cx.notify();
       }
     }
