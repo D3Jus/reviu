@@ -7,9 +7,9 @@ use serde_json::{Value, json};
 use crate::AppProfile;
 use crate::config::{AppSettings, ConfigStore};
 
-const UMAMI_ENDPOINT: &str = "https://analytics.jorisgallot.dev/api/send";
-const UMAMI_WEBSITE_ID: &str = "6dea885c-63c9-45d3-8dd0-df46756e5b31";
-const UMAMI_HOSTNAME: &str = "app.reviu.dev";
+const ANALYTICS_ENDPOINT: &str = "https://sonar.jorisgallot.dev/ingest/events";
+const ANALYTICS_SITE_ID: &str = "6dea885c-63c9-45d3-8dd0-df46756e5b31";
+const ANALYTICS_HOSTNAME: &str = "app.reviu.dev";
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(5);
 
 #[derive(Clone)]
@@ -81,7 +81,7 @@ pub fn track_with(cx: &mut App, name: &'static str, data: Option<Value>) {
   let payload = build_payload(&analytics.device_id, name, data);
 
   cx.background_spawn(async move {
-    let _ = analytics.client.post(UMAMI_ENDPOINT).json(&payload).send();
+    let _ = analytics.client.post(ANALYTICS_ENDPOINT).json(&payload).send();
   })
   .detach();
 }
@@ -110,8 +110,8 @@ fn build_payload(device_id: &str, name: &str, data: Option<Value>) -> Value {
   json!({
     "type": "event",
     "payload": {
-      "website": UMAMI_WEBSITE_ID,
-      "hostname": UMAMI_HOSTNAME,
+      "website": ANALYTICS_SITE_ID,
+      "hostname": ANALYTICS_HOSTNAME,
       "name": name,
       "url": "/",
       "data": event_data,
