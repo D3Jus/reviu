@@ -81,7 +81,11 @@ pub fn track_with(cx: &mut App, name: &'static str, data: Option<Value>) {
   let payload = build_payload(&analytics.device_id, name, data);
 
   cx.background_spawn(async move {
-    let _ = analytics.client.post(ANALYTICS_ENDPOINT).json(&payload).send();
+    let _ = analytics
+      .client
+      .post(ANALYTICS_ENDPOINT)
+      .json(&payload)
+      .send();
   })
   .detach();
 }
