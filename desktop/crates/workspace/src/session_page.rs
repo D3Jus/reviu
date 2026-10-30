@@ -15,8 +15,6 @@ use editor::{
   ReviewCommentCreateHandler, ReviewCommentCreateRequest, ReviewCommentDeleteHandler,
   ReviewCommentEditHandler, ReviewCommentSendHandler,
 };
-#[cfg(any(test, feature = "test-support"))]
-use editor::{ReviewCommentMode, ReviewCommentSide};
 use gpui::AnimationExt as _;
 use gpui::{
   AnyElement, AnyWindowHandle, App, ClipboardItem, Context, Entity, FocusHandle, Focusable,
@@ -41,7 +39,6 @@ use crate::agent_review::{
 };
 use crate::agent_review_store::{read_review, review_path_for_repo, write_review};
 use crate::agent_settings::AgentSettings;
-use crate::auth_state::AuthStateStore;
 use crate::config::{ConfigStore, RecentProjectKind};
 use crate::conversation_hub::{ConversationHub, ConversationStoreAccess};
 use crate::date_format::format_relative_age;
@@ -54,7 +51,6 @@ use crate::file_search_palette::open_file_search_palette;
 use crate::file_view::{
   BinaryPreview, build_binary_preview, render_binary_preview, render_dirty_indicator,
 };
-use crate::inbox::Inbox;
 use crate::open_intent::OpenIntent;
 use crate::project_files::{list_project_files, list_project_search_files};
 use crate::review_destination::{AgentReviewHandlers, ReviewDestination, configure_review};
@@ -68,7 +64,6 @@ use crate::session_page::file_viewer::{OpenFileSearchMatch, OpenedSnapshot, Unsa
 use crate::session_page::tab_switcher::{TabSwitcher, TabSwitcherEntry, TabSwitcherEvent};
 use git::{InteractiveRebaseTarget, RepoStatusKind};
 
-use crate::git_telemetry::{self, GitTelemetry};
 use crate::hunk_actions::{
   ConflictActionLabels, resolve_active_conflict, restore_hunk, toggle_hunk_stage,
 };
@@ -77,7 +72,6 @@ use crate::interactive_rebase_todo_view::{
   InteractiveRebaseTodoView, InteractiveRebaseTodoViewCancelHandler,
   InteractiveRebaseTodoViewConfig, InteractiveRebaseTodoViewHandler,
 };
-use sentry::protocol::Map;
 
 use crate::annotations::{AnnotationDirection, navigate_annotation};
 #[cfg(test)]
@@ -89,7 +83,6 @@ use crate::palette_branches::{
 use crate::project_search_view::{
   ProjectSearchHandler, ProjectSearchOpenRequest, ProjectSearchView,
 };
-use crate::pull_request_dialog::{GithubBranchContext, open_create_pull_request_dialog};
 use crate::repo_command::{RepoCommand, RepoCommandOutcome, branch_ref_from_palette};
 use crate::repo_snapshot::{RepoSnapshot, RepoSnapshotEvent};
 use crate::repo_state::{
@@ -98,7 +91,6 @@ use crate::repo_state::{
 use crate::review_list::{ReviewSection, review_panel_comments};
 use crate::status_poll;
 use crate::svg_preview::SvgPreview;
-use crate::workspace::WorkspaceApi;
 use crate::{
   CommentHunk, JumpToLatestMessage, SendReviewCommentsToAgent, ShowCommandPalette, ShowFileSearch,
   ShowGlobalSearch,
@@ -206,52 +198,6 @@ impl RepoCommandInFlight {
   }
 }
 
-/// Global entry point so app-wide events can reach the sessions shell.
-pub(crate) struct SessionPageHandle {
-  page: Option<gpui::WeakEntity<SessionPage>>,
-}
-
-impl gpui::Global for SessionPageHandle {}
-
-impl SessionPageHandle {
-  pub fn register(cx: &mut Context<SessionPage>) {
-    cx.set_global(Self {
-      page: Some(cx.entity().downgrade()),
-    });
-  }
-
-  fn with_page(
-    cx: &mut App,
-    f: impl FnOnce(&mut SessionPage, &mut Window, &mut Context<SessionPage>) + 'static,
-  ) {
-    let Some(page) = cx
-      .try_global::<Self>()
-      .and_then(|handle| handle.page.clone())
-      .and_then(|weak| weak.upgrade())
-    else {
-      return;
-    };
-    let window_handle = page.read(cx).window_handle;
-    // Deferred: callers often sit inside this very window's update, where a
-    // re-entrant `update_window` is a silent no-op.
-    cx.defer(move |cx| {
-      let _ = cx.update_window(window_handle, |_, window, cx| {
-        page.update(cx, |page, cx| f(page, window, cx));
-      });
-    });
-  }
-
-  /// GitHub access changed: the inbox and the branch's pull request depend on it.
-  pub fn refresh_github_state(cx: &mut App) {
-    Self::with_page(cx, |page, _window, cx| {
-      page
-        .dock_panel
-        .update(cx, |panel, cx| panel.refresh_branch_pull_request_state(cx));
-      cx.notify();
-    });
-  }
-}
-
 /// The pin remembers which session it was set on: any other session shown
 /// means the user moved on, and the dock follows them again.
 struct CheckoutOverride {
@@ -296,7 +242,6 @@ pub struct SessionPage {
   turn_gate: TurnGate,
   agent_notification: Option<gpui::WindowHandle<crate::agent_notification::AgentNotification>>,
   dock_panel: Entity<DockPanel>,
-  inbox: Entity<Inbox>,
   session_list: Entity<SessionList>,
   /// The project selected in the UI: file tree/search/editor can eventually
   /// stand on this even when there is no Git repository.
@@ -363,8 +308,6 @@ pub struct SessionPage {
   repo_command_in_flight: Option<RepoCommandInFlight>,
   last_remote_check_at: Option<Instant>,
   auto_fetch_in_flight: bool,
-  /// Set while pushing an unpublished branch on the way to the pull request form.
-  pending_pull_request: Option<GithubBranchContext>,
   dock_open: bool,
   dock_width: f32,
   diff_chat_open: bool,
@@ -377,7 +320,6 @@ pub struct SessionPage {
   _active_repo_task: Option<Task<()>>,
   _repo_command_task: Option<Task<()>>,
   _auto_fetch_task: Option<Task<()>>,
-  _pull_request_link_task: Option<Task<()>>,
   _browse_task: Option<Task<()>>,
   _poll_task: Option<Task<()>>,
 }
@@ -392,10 +334,8 @@ mod commands;
 mod driver;
 mod file_viewer;
 mod palette;
-mod pull_request_link;
 mod render;
 mod repo;
-mod review_github;
 pub(crate) mod tab_switcher;
 mod terminal_viewer;
 #[cfg(test)]
@@ -416,7 +356,6 @@ impl SessionPage {
         .map(|project| project.path.clone())
     });
     let dock_panel = cx.new(|cx| DockPanel::new(fallback_repo.clone(), window, cx));
-    let inbox = cx.new(|_| Inbox::new());
     let repo_snapshot = cx.new(|_| RepoSnapshot::new(fallback_repo.clone()));
     cx.subscribe(
       &repo_snapshot,
@@ -599,15 +538,11 @@ impl SessionPage {
             window.push_notification(Notification::warning(error), cx);
           }
         }
-        DockPanelEvent::PublishBranchAndCreatePullRequest(context) => {
-          this.publish_branch_and_create_pull_request(context.clone(), window, cx);
-        }
         DockPanelEvent::StatusRefreshed => {
           this.sync_editor_unmerged_state(cx);
           // A save can empty the file's diff (or refill it): the split view
           // must follow what the file can actually show.
           this.sync_diff_view(cx);
-          this.sync_git_telemetry(cx);
         }
         DockPanelEvent::OpenReviewComment { path, line, intent } => {
           let (path, line, intent) = (path.clone(), *line as u32, *intent);
@@ -621,28 +556,6 @@ impl SessionPage {
         DockPanelEvent::DeleteReviewComment { id } => {
           this.delete_agent_review_comment(*id, cx);
         }
-        DockPanelEvent::DeletePullRequestReviewComment { id } => {
-          this.confirm_github_review_comment_delete(*id, window, cx);
-        }
-        DockPanelEvent::OpenPullRequestFile {
-          base_oid,
-          head_oid,
-          path,
-          line,
-          intent,
-        } => {
-          let (base_oid, head_oid, path, intent) =
-            (base_oid.clone(), head_oid.clone(), path.clone(), *intent);
-          let line = line.map(|line| line as u32);
-          this.open_for_intent(
-            intent,
-            move |this, window, cx| {
-              this.open_pull_request_file(base_oid, head_oid, path, line, intent, window, cx)
-            },
-            window,
-            cx,
-          );
-        }
         DockPanelEvent::SendReviewComment { id } => {
           this.send_agent_review_comment_to_agent(*id, window, cx);
         }
@@ -651,22 +564,6 @@ impl SessionPage {
         }
         DockPanelEvent::DiscardReview => {
           this.confirm_discard_agent_review(window, cx);
-        }
-        DockPanelEvent::PullRequestReviewCommentsChanged => {
-          this.sync_github_review_comments(cx);
-        }
-        DockPanelEvent::PullRequestReviewCommentSubmitted { error } => {
-          this.finish_github_review_comment(error.clone(), window, cx);
-        }
-        DockPanelEvent::SubmitPullRequestReview => {
-          this.dock_panel.update(cx, |panel, cx| {
-            panel.submit_pull_request_review(window, cx);
-          });
-        }
-        DockPanelEvent::DiscardPullRequestReview => {
-          this.dock_panel.update(cx, |panel, cx| {
-            panel.discard_pull_request_review(window, cx);
-          });
         }
       },
     )
@@ -686,7 +583,6 @@ impl SessionPage {
       turn_gate: TurnGate::new(),
       agent_notification: None,
       dock_panel,
-      inbox,
       session_list,
       synced_checkout: None,
       project_root,
@@ -739,7 +635,6 @@ impl SessionPage {
       repo_command_in_flight: None,
       last_remote_check_at: Some(Instant::now()),
       auto_fetch_in_flight: false,
-      pending_pull_request: None,
       dock_open: true,
       dock_width: DOCK_PANEL_DEFAULT_WIDTH,
       diff_chat_open: true,
@@ -751,11 +646,9 @@ impl SessionPage {
       _active_repo_task: None,
       _repo_command_task: None,
       _auto_fetch_task: None,
-      _pull_request_link_task: None,
       _browse_task: None,
       _poll_task: None,
     };
-    SessionPageHandle::register(cx);
     cx.on_app_quit(|page, cx| {
       if let Err(error) = page.flush_untitled_buffers(cx) {
         page.report_untitled_error(error, cx);
@@ -775,8 +668,6 @@ impl SessionPage {
     page.refresh_branch(cx);
     page.watch_window_activation(window, cx);
     page.start_polling(cx);
-    // A link to a pull request has to find this shell, deep link included.
-    crate::pull_request_surface::PullRequestSurfaceHandle::register(cx);
     page
   }
 
@@ -1439,30 +1330,6 @@ impl SessionPage {
     cx.notify();
   }
 
-  /// What a crash or a git error should carry about where the user was.
-  fn git_telemetry<'a>(&'a self, cx: &'a App) -> GitTelemetry<'a> {
-    let agent = self.agent_chat_view.as_ref().map(|panel| panel.read(cx));
-    GitTelemetry {
-      repo_root: self.synced_checkout.as_deref(),
-      tab: git_telemetry::dock_tab_tag(self.dock_panel.read(cx).active_tab()),
-      diff_view: git_telemetry::diff_view_tag(
-        self.diff_view,
-        self.show_preview && self.shown_previewable(),
-      ),
-      center: Some(self.center_layout.active_tab().kind.telemetry_tag()),
-      agent: agent.map(|panel| panel.backend_kind().as_str()),
-      agent_turn_running: agent.is_some_and(|panel| panel.is_turn_in_flight()),
-      in_worktree: self.synced_checkout.is_some()
-        && self.synced_checkout.as_deref() != self.project_root.as_deref(),
-      window_count: cx.windows().len(),
-    }
-  }
-
-  /// Keeps the crash context in step with what the user is looking at.
-  fn sync_git_telemetry(&self, cx: &App) {
-    self.git_telemetry(cx).sync_or_clear();
-  }
-
   fn open_project_action(
     &mut self,
     _: &crate::OpenProject,
@@ -1558,15 +1425,6 @@ impl SessionPage {
     self.open_dock_tab(DockPanelTab::Review, window, cx);
   }
 
-  fn open_pull_request_action(
-    &mut self,
-    _: &crate::OpenPullRequestSidebar,
-    window: &mut Window,
-    cx: &mut Context<Self>,
-  ) {
-    self.open_dock_tab(DockPanelTab::PullRequest, window, cx);
-  }
-
   /// Browsing waits: holding an arrow down must load the file it stops on, not
   /// every file it crosses. Choosing one never waits, and drops what was queued.
   fn open_for_intent(
@@ -1602,10 +1460,6 @@ impl SessionPage {
     let handle = self.focus_handle(cx);
     window.focus(&handle, cx);
     cx.stop_propagation();
-  }
-
-  pub(crate) fn window_handle(&self) -> AnyWindowHandle {
-    self.window_handle
   }
 
   fn center_tab_belongs_to_checkout(&self, tab: &CenterTab, checkout: &Path, cx: &App) -> bool {
@@ -2185,9 +2039,6 @@ impl SessionPage {
             Some(CenterTabSnapshot::Commit { oid }) => {
               self.open_commit_file(oid, path, intent, window, cx)
             }
-            Some(CenterTabSnapshot::PullRequestRange { base, head }) => {
-              self.open_pull_request_file(base, head, path, None, intent, window, cx)
-            }
             None => self.open_diff(path, None, intent, window, cx),
           }
         }
@@ -2220,6 +2071,7 @@ impl SessionPage {
 
   /// Opens the dock on a tab without the toggle: something outside asked for
   /// this surface, so closing it would be the opposite of the answer.
+  #[cfg(any(test, feature = "test-support"))]
   pub(crate) fn show_dock_tab(
     &mut self,
     tab: DockPanelTab,
@@ -2268,28 +2120,6 @@ impl SessionPage {
       return Err("No project selected.".into());
     }
     self.open_file(rel_path, Some(1), None, OpenIntent::Open, window, cx);
-    Ok(())
-  }
-
-  #[cfg(any(test, feature = "test-support"))]
-  #[doc(hidden)]
-  pub fn open_pull_request_file_for_driver(
-    &mut self,
-    rel_path: Option<PathBuf>,
-    window: &mut Window,
-    cx: &mut Context<Self>,
-  ) -> Result<(), SharedString> {
-    let Some((base, head, path)) = self
-      .dock_panel
-      .read(cx)
-      .pull_request_file_target_for_driver(rel_path.as_deref())
-    else {
-      return Err("No loaded pull request file matches the driver request.".into());
-    };
-    self.dock_panel.update(cx, |panel, cx| {
-      panel.select_pr_file_for_driver(Some(path.as_path()), window, cx)
-    });
-    self.open_pull_request_file(base, head, path, None, OpenIntent::Open, window, cx);
     Ok(())
   }
 
@@ -2671,80 +2501,8 @@ impl SessionPage {
 
   #[cfg(any(test, feature = "test-support"))]
   #[doc(hidden)]
-  pub fn show_pull_request_for_driver(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-    self.show_dock_tab(DockPanelTab::PullRequest, window, cx);
-  }
-
-  #[cfg(any(test, feature = "test-support"))]
-  #[doc(hidden)]
   pub fn show_review_for_driver(&mut self, window: &mut Window, cx: &mut Context<Self>) {
     self.show_dock_tab(DockPanelTab::Review, window, cx);
-  }
-
-  #[cfg(any(test, feature = "test-support"))]
-  #[doc(hidden)]
-  pub fn set_pull_request_details_expanded_for_driver(
-    &mut self,
-    expanded: bool,
-    cx: &mut Context<Self>,
-  ) {
-    self.dock_panel.update(cx, |panel, cx| {
-      panel.set_pull_request_details_expanded_for_driver(expanded, cx)
-    });
-  }
-
-  #[cfg(any(test, feature = "test-support"))]
-  #[doc(hidden)]
-  pub fn create_pull_request_review_comment_for_driver(
-    &mut self,
-    rel_path: PathBuf,
-    line: usize,
-    body: String,
-    cx: &mut Context<Self>,
-  ) -> Result<(), SharedString> {
-    let Some(selected_file) = self.warm_selected_file() else {
-      return Err("No pull request file is open.".into());
-    };
-    if selected_file != rel_path.as_path() {
-      return Err(format!("Pull request file is not open: {}", rel_path.display()).into());
-    }
-    let request = ReviewCommentCreateRequest {
-      line,
-      side: ReviewCommentSide::Right,
-      start_line: None,
-      start_side: None,
-      in_reply_to_id: None,
-      body: Arc::from(body),
-      mode: ReviewCommentMode::PendingReview,
-    };
-    self.dock_panel.update(cx, |panel, cx| {
-      panel.create_pull_request_review_comment(request, rel_path, cx)
-    });
-    Ok(())
-  }
-
-  #[cfg(any(test, feature = "test-support"))]
-  #[doc(hidden)]
-  pub fn submit_pull_request_review_for_driver(
-    &mut self,
-    body: String,
-    cx: &mut Context<Self>,
-  ) -> Result<(), SharedString> {
-    self.dock_panel.update(cx, |panel, cx| {
-      panel.submit_pull_request_review_for_driver(body, cx)
-    })
-  }
-
-  #[cfg(any(test, feature = "test-support"))]
-  #[doc(hidden)]
-  pub fn discard_pull_request_review_for_driver(
-    &mut self,
-    window: &mut Window,
-    cx: &mut Context<Self>,
-  ) {
-    self.dock_panel.update(cx, |panel, cx| {
-      panel.discard_pull_request_review(window, cx)
-    });
   }
 
   #[cfg(any(test, feature = "test-support"))]
@@ -4046,75 +3804,5 @@ mod tests {
         .collect::<Vec<_>>();
       assert_eq!(paths, vec![PathBuf::from("README.md")]);
     });
-  }
-
-  #[gpui::test]
-  async fn a_link_to_the_open_branch_pull_request_shows_its_panel(cx: &mut TestAppContext) {
-    let repo = TempRepo::init("pull-request-surface-link");
-    commit_text_file(&repo.path, Path::new("README.md"), "v1\n", "initial");
-    let (page, cx) = add_session_page_window(repo.path.clone(), cx);
-    cx.run_until_parked();
-
-    page.update(cx, |page, cx| {
-      page.dock_panel.update(cx, |panel, cx| {
-        panel.set_branch_pull_request_state(surface_pull_request(42), cx);
-      });
-    });
-    cx.run_until_parked();
-
-    // Case does not decide whether a link is yours.
-    assert!(cx.update(
-      |_, cx| crate::pull_request_surface::PullRequestSurfaceHandle::show(
-        "ACME", "Widget", 42, None, cx
-      )
-    ));
-    cx.run_until_parked();
-
-    page.read_with(cx, |page, cx| {
-      assert!(page.dock_open);
-      assert_eq!(
-        page.dock_panel.read(cx).active_tab(),
-        DockPanelTab::PullRequest
-      );
-    });
-  }
-
-  #[gpui::test]
-  async fn a_link_to_another_pull_request_has_no_home_here(cx: &mut TestAppContext) {
-    let repo = TempRepo::init("pull-request-surface-other-link");
-    commit_text_file(&repo.path, Path::new("README.md"), "v1\n", "initial");
-    let (page, cx) = add_session_page_window(repo.path.clone(), cx);
-    cx.run_until_parked();
-
-    page.update(cx, |page, cx| {
-      page.dock_panel.update(cx, |panel, cx| {
-        panel.set_branch_pull_request_state(surface_pull_request(42), cx);
-      });
-    });
-    cx.run_until_parked();
-
-    // Another number, another repository: neither is what this branch proposes.
-    assert!(!cx.update(
-      |_, cx| crate::pull_request_surface::PullRequestSurfaceHandle::show(
-        "acme", "widget", 7, None, cx
-      )
-    ));
-    assert!(!cx.update(
-      |_, cx| crate::pull_request_surface::PullRequestSurfaceHandle::show(
-        "acme", "other", 42, None, cx
-      )
-    ));
-
-    // And a branch that lost its pull request stops claiming links.
-    page.update(cx, |page, cx| {
-      page.dock_panel.update(cx, |panel, cx| {
-        panel.set_branch_pull_request_state(crate::dock_panel::BranchPrState::NoRemote, cx);
-      });
-    });
-    assert!(!cx.update(
-      |_, cx| crate::pull_request_surface::PullRequestSurfaceHandle::show(
-        "acme", "widget", 42, None, cx
-      )
-    ));
   }
 }

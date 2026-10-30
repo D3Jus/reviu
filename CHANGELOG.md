@@ -2,6 +2,24 @@
 
 All notable changes to Reviu are documented here.
 
+## 1.8.0
+
+### Local-First Reviu
+
+Reviu is now a purely local git + agent-review tool. The GitHub/Pro integration — pull request review, the notifications inbox, sign-in, billing, and the "Open in Reviu" browser extension — has been removed, along with the right-dock Pull Request tab and its command-palette and keyboard entries. Everything else (the agent, the diff/review workflow, the Changes/Review/Files/History panels, and the local git client) works as before.
+
+### No Telemetry
+
+Reviu no longer collects or sends any analytics, usage events, or crash reports. The anonymous-usage-data setting has been removed because there is nothing left to send.
+
+### Darcula Theme
+
+The dark theme now ships a Darcula palette, matching the familiar JetBrains dark look.
+
+### Tab Improvements
+
+Middle-clicking a center tab now closes it, and the tab strip scrolls with a plain mouse wheel — no need to hold Shift.
+
 ## 1.7.0
 
 ### Reliable Pi Recovery

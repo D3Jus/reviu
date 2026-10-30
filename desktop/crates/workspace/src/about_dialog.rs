@@ -1,4 +1,4 @@
-use gpui::{App, Context, Render, Task, Window, div, img, prelude::*, px};
+use gpui::{App, Context, Render, Window, div, img, prelude::*, px};
 use gpui_component::{
   ActiveTheme as _, Disableable as _, Icon, IconName, Sizable as _,
   button::{Button, ButtonVariants as _},
@@ -9,13 +9,9 @@ use ui::{REVIU_WORDMARK_WIDTH_PX, StatusThemeExt, UiIconName, WindowExt, reviu_l
 
 const CHANGELOG_URL: &str = "https://reviu.dev/changelog";
 
-use crate::{
-  app_update::{
-    AppUpdateState, AppUpdateStore, AvailableAppUpdate, UpdateArtifact, current_arch,
-    current_platform, ready_update_status_message, resolved_build_version, start_update_download,
-    update_action_label,
-  },
-  workspace::WorkspaceApi,
+use crate::app_update::{
+  AppUpdateState, AppUpdateStore, current_arch, current_platform, ready_update_status_message,
+  resolved_build_version, start_update_download, update_action_label,
 };
 
 pub fn open_about_dialog(window: &mut Window, _cx: &mut App) {
@@ -42,26 +38,11 @@ enum UpdateNoticeTone {
   Bad,
 }
 
-#[derive(Clone)]
-enum UpdateCheckStatus {
-  UpToDate,
-  UpdateAvailable(String),
-  Error(String),
-}
-
-struct AboutContent {
-  check_in_progress: bool,
-  check_status: Option<UpdateCheckStatus>,
-  check_task: Option<Task<()>>,
-}
+struct AboutContent;
 
 impl AboutContent {
   fn new(_: &mut Context<Self>) -> Self {
-    Self {
-      check_in_progress: false,
-      check_status: None,
-      check_task: None,
-    }
+    Self
   }
 
   fn current_client_version() -> String {
@@ -83,110 +64,29 @@ impl AboutContent {
     format!("{platform} {arch}")
   }
 
-  fn check_for_updates_action(
-    &mut self,
-    _: &gpui::ClickEvent,
-    _: &mut Window,
-    cx: &mut Context<Self>,
-  ) {
-    if self.check_in_progress {
-      return;
-    }
-
-    self.check_in_progress = true;
-    self.check_status = None;
-    cx.notify();
-
-    let api = WorkspaceApi::global(cx).api.clone();
-    let current_version = Self::current_client_version();
-    let platform = current_platform().to_string();
-    let arch = current_arch().to_string();
-
-    let task = cx.spawn(async move |this, cx| {
-      let result = cx
-        .background_spawn(
-          async move { api.check_desktop_update(&current_version, &platform, &arch) },
-        )
-        .await;
-      let _ = this.update(cx, |this, cx| {
-        this.check_in_progress = false;
-
-        match result {
-          Ok(payload) if payload.update_available => {
-            let Some(artifact) = payload.artifact else {
-              let message = "Update artifact is missing for this platform.";
-              this.check_status = Some(UpdateCheckStatus::Error(message.to_string()));
-              AppUpdateStore::set_error(cx, None, message);
-              cx.notify();
-              return;
-            };
-            let update = AvailableAppUpdate {
-              latest_version: payload.latest_version,
-              minimum_supported_version: payload.minimum_supported_version,
-              release_notes_url: payload.release_notes_url,
-              force_update: payload.force_update,
-              artifact: UpdateArtifact {
-                url: artifact.url,
-                sha256: artifact.sha256,
-                size: artifact.size,
-              },
-            };
-            AppUpdateStore::set_available_update(cx, Some(update.clone()));
-            this.check_status = Some(UpdateCheckStatus::UpdateAvailable(update.latest_version));
-          }
-          Ok(_) => {
-            AppUpdateStore::clear_available_update(cx);
-            this.check_status = Some(UpdateCheckStatus::UpToDate);
-          }
-          Err(err) => {
-            this.check_status = Some(UpdateCheckStatus::Error(err.to_string()));
-          }
-        }
-
-        cx.notify();
-      });
-    });
-
-    self.check_task = Some(task);
-  }
-
   fn download_action(&mut self, _: &gpui::ClickEvent, _: &mut Window, cx: &mut Context<Self>) {
-    self.check_status = None;
     start_update_download(cx);
     cx.notify();
   }
 
   fn update_notice(&self, cx: &App) -> Option<(String, UpdateNoticeTone)> {
-    match &self.check_status {
-      Some(UpdateCheckStatus::UpToDate) => Some((
-        "You're already on the latest version.".to_string(),
-        UpdateNoticeTone::Neutral,
-      )),
-      Some(UpdateCheckStatus::UpdateAvailable(version)) => Some((
-        format!("Update available: {version}"),
+    match AppUpdateStore::try_state(cx) {
+      Some(AppUpdateState::Available(update)) => Some((
+        format!("Update available: {}", update.latest_version),
         UpdateNoticeTone::Good,
       )),
-      Some(UpdateCheckStatus::Error(error)) => {
-        Some((format!("Update failed: {error}"), UpdateNoticeTone::Bad))
+      Some(AppUpdateState::Downloading(_)) => Some((
+        "Downloading update artifact...".to_string(),
+        UpdateNoticeTone::Neutral,
+      )),
+      Some(AppUpdateState::ReadyToInstall(_)) => Some((
+        ready_update_status_message().to_string(),
+        UpdateNoticeTone::Good,
+      )),
+      Some(AppUpdateState::Error { message, .. }) => {
+        Some((format!("Update failed: {message}"), UpdateNoticeTone::Bad))
       }
-      None => match AppUpdateStore::try_state(cx) {
-        Some(AppUpdateState::Available(update)) => Some((
-          format!("Update available: {}", update.latest_version),
-          UpdateNoticeTone::Good,
-        )),
-        Some(AppUpdateState::Downloading(_)) => Some((
-          "Downloading update artifact...".to_string(),
-          UpdateNoticeTone::Neutral,
-        )),
-        Some(AppUpdateState::ReadyToInstall(_)) => Some((
-          ready_update_status_message().to_string(),
-          UpdateNoticeTone::Good,
-        )),
-        Some(AppUpdateState::Error { message, .. }) => {
-          Some((format!("Update failed: {message}"), UpdateNoticeTone::Bad))
-        }
-        _ => None,
-      },
+      _ => None,
     }
   }
 }
@@ -216,15 +116,6 @@ impl Render for AboutContent {
       .icon(IconName::ExternalLink)
       .label("Changelog")
       .on_click(|_, _, cx| cx.open_url(CHANGELOG_URL));
-
-    let check_button = Button::new("about-check-updates")
-      .small()
-      .ghost()
-      .icon(UiIconName::RefreshCw)
-      .label("Check for updates")
-      .loading(self.check_in_progress)
-      .disabled(self.check_in_progress)
-      .on_click(cx.listener(Self::check_for_updates_action));
 
     let download_button = Button::new("about-download-update")
       .small()
@@ -288,7 +179,6 @@ impl Render for AboutContent {
           .child(
             h_flex()
               .gap_2()
-              .child(check_button)
               .when(has_update, |this| this.child(download_button)),
           ),
       )
@@ -298,7 +188,7 @@ impl Render for AboutContent {
 #[cfg(test)]
 mod tests {
   use super::*;
-  use crate::app_update::ReadyToInstallAppUpdate;
+  use crate::app_update::{AvailableAppUpdate, ReadyToInstallAppUpdate, UpdateArtifact};
   use gpui::TestAppContext;
   use std::path::PathBuf;
 
@@ -337,7 +227,6 @@ mod tests {
     cx.update(|cx| {
       gpui_component::init(cx);
       cx.set_global(AppUpdateStore::default());
-      cx.set_global(WorkspaceApi::new());
     });
 
     let (_root, cx) = cx.add_window_view(|window, cx| {
@@ -361,21 +250,6 @@ mod tests {
       let content = cx.new(AboutContent::new);
       content.read_with(cx, |content, cx| {
         assert!(content.update_notice(cx).is_none());
-      });
-    });
-  }
-
-  #[gpui::test]
-  fn a_failed_check_is_reported_in_the_dialog(cx: &mut TestAppContext) {
-    cx.update(|cx| {
-      cx.set_global(AppUpdateStore::default());
-      let content = cx.new(AboutContent::new);
-      content.update(cx, |content, _| {
-        content.check_status = Some(UpdateCheckStatus::Error("network is down".to_string()));
-      });
-      content.read_with(cx, |content, cx| {
-        let (message, _) = content.update_notice(cx).expect("a notice");
-        assert_eq!(message, "Update failed: network is down");
       });
     });
   }

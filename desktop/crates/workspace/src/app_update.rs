@@ -42,6 +42,10 @@ pub struct ReadyToInstallAppUpdate {
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum AppUpdateState {
+  // The update CHECK ran through the now-removed backend client, so nothing
+  // currently constructs `Available`; the install/notify flow is kept for a
+  // future update source. ponytail: dormant until a new check is wired.
+  #[allow(dead_code)]
   Available(AvailableAppUpdate),
   Downloading(AvailableAppUpdate),
   ReadyToInstall(ReadyToInstallAppUpdate),
@@ -96,6 +100,9 @@ impl AppUpdateStore {
     cx.refresh_windows();
   }
 
+  // Kept for a future update-check source; the previous one used the removed
+  // backend client. ponytail: dormant, see `AppUpdateState::Available`.
+  #[allow(dead_code)]
   pub fn set_available_update(cx: &mut App, update: Option<AvailableAppUpdate>) {
     match update {
       Some(update) => Self::set_state(cx, Some(AppUpdateState::Available(update))),
@@ -103,6 +110,7 @@ impl AppUpdateStore {
     }
   }
 
+  #[allow(dead_code)]
   pub fn clear_available_update(cx: &mut App) {
     Self::set_state(cx, None);
   }
@@ -322,7 +330,6 @@ pub fn start_update_download(cx: &mut App) {
     {
       match install_update_artifact(&ready) {
         Ok(()) => {
-          crate::sentry_context::mark_closing();
           cx.quit();
         }
         Err(err) => AppUpdateStore::set_error(cx, Some(ready.update.clone()), err.to_string()),

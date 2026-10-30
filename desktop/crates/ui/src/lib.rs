@@ -4,7 +4,6 @@ mod confirm_dialog;
 mod dialog_backdrop;
 mod dropdown_select;
 mod github_emoji_completion;
-mod github_url;
 mod icons;
 mod markdown_composer;
 mod palette;
@@ -24,10 +23,10 @@ pub use assets::{AppAssets, REVIU_WORDMARK_WIDTH_PX, reviu_logo_path, set_runtim
 pub use command_palette::{
   COMMAND_PALETTE_CONTEXT, CommandPalette, CommandPaletteAction, CommandPaletteBranch,
   CommandPaletteBranchKind, CommandPaletteCommand, CommandPaletteCommandId, CommandPaletteConfig,
-  CommandPaletteGithubRepoTab, CommandPaletteGroup, CommandPaletteHandler,
-  CommandPaletteInitialScreen, CommandPalettePage, CommandPaletteProject, CommandPaletteStash,
-  CommandPaletteUsageRecorder, CommandPaletteUsageRecorderGlobal, CommandPaletteUsageScorer,
-  CommandPaletteUsageScorerGlobal, GlobalCommandsContext,
+  CommandPaletteGroup, CommandPaletteHandler, CommandPaletteInitialScreen, CommandPalettePage,
+  CommandPaletteProject, CommandPaletteStash, CommandPaletteUsageRecorder,
+  CommandPaletteUsageRecorderGlobal, CommandPaletteUsageScorer, CommandPaletteUsageScorerGlobal,
+  GlobalCommandsContext,
 };
 pub use confirm_dialog::ConfirmDialog;
 pub use dialog_backdrop::render_dialog_backdrop;
@@ -35,7 +34,6 @@ pub use dropdown_select::{
   DropdownSelectConfig, DropdownSelectItem, DropdownSelectOption, dropdown_select,
 };
 pub use github_emoji_completion::GithubEmojiInput;
-pub use github_url::parse_github_url_action;
 pub use gpui::Anchor;
 pub use gpui_component::Disableable;
 pub use gpui_component::IconName;

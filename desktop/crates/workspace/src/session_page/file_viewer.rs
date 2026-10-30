@@ -9,8 +9,6 @@ use super::*;
 pub(crate) enum OpenedSnapshot {
   /// One commit against its parent.
   Commit(String),
-  /// What a pull request proposes: its merge base against its head.
-  PullRequestRange { base: String, head: String },
   /// The exact old/new text an agent reported for a tool call.
   AgentTool {
     old_text: Option<String>,
@@ -186,7 +184,6 @@ fn update_editor_state_path(
 enum RestoredEditorReview {
   None,
   Agent,
-  Github,
 }
 
 enum RestoredEditorData {
@@ -723,7 +720,6 @@ impl SessionPage {
           },
         );
         this.sync_editor_unmerged_state(cx);
-        this.sync_git_telemetry(cx);
         // Focus once loaded: the requester (file tree, list, search) may still hold
         // focus, and there was no editor to focus when the open was requested.
         // A browse leaves it where it is, or the arrow keys would land here.
@@ -1110,9 +1106,6 @@ impl SessionPage {
         })
       }
       Some(CenterTabSnapshot::Commit { oid }) => Some(OpenedSnapshot::Commit(oid)),
-      Some(CenterTabSnapshot::PullRequestRange { base, head }) => {
-        Some(OpenedSnapshot::PullRequestRange { base, head })
-      }
       None => None,
     };
     self.set_editor_tab_loading(tab.clone(), rel_path.clone(), opened_snapshot.clone());
@@ -1178,22 +1171,6 @@ impl SessionPage {
                   opened_snapshot: OpenedSnapshot::Commit(oid),
                 },
                 RestoredEditorReview::None,
-              ))
-            }
-            Some(OpenedSnapshot::PullRequestRange { base, head }) => {
-              let file =
-                git::load_range_file_diff(&load_checkout, &base, &head, &load_rel_path).ok()?;
-              let diff_set = (!file.patch.trim().is_empty())
-                .then(|| git::diff_set_from_patch(&file.patch).ok())
-                .flatten();
-              Some((
-                RestoredEditorData::ReadOnly {
-                  content: file.content,
-                  binary_bytes: file.binary_bytes,
-                  diff_set,
-                  opened_snapshot: OpenedSnapshot::PullRequestRange { base, head },
-                },
-                RestoredEditorReview::Github,
               ))
             }
             None => Some((
@@ -1262,9 +1239,6 @@ impl SessionPage {
           RestoredEditorReview::Agent => {
             this.install_agent_review_handlers_for_editor(&editor, cx);
             this.sync_agent_review_comments_to_editor(cx);
-          }
-          RestoredEditorReview::Github => {
-            this.install_github_review_handlers_for_editor(&editor, cx);
           }
         }
         if is_worktree {
@@ -1493,13 +1467,7 @@ impl SessionPage {
       Self::reveal_editor_position(&editor, reveal_doc_position, search_match, cx);
     }
     self.sync_editor_unmerged_state(cx);
-    self.sync_git_telemetry(cx);
     match self.warm_opened_snapshot() {
-      Some(OpenedSnapshot::PullRequestRange { .. }) => {
-        if let Some(editor) = active_editor {
-          self.install_github_review_handlers_for_editor(&editor, cx);
-        }
-      }
       Some(_) => {
         if let Some(editor) = active_editor.as_ref() {
           configure_review(editor, ReviewDestination::None, cx);
@@ -1646,7 +1614,6 @@ impl SessionPage {
             opened_snapshot: Some(opened_snapshot),
           },
         );
-        this.sync_git_telemetry(cx);
         if this.center == CenterView::Diff && intent.takes_focus() {
           let _ = cx.update_window(this.window_handle, |_, window, cx| {
             let focus_handle = this.focus_handle(cx);
@@ -1746,150 +1713,6 @@ impl SessionPage {
             opened_snapshot: Some(opened_snapshot),
           },
         );
-        this.svg_preview.update(cx, |preview, _| preview.clear());
-        cx.notify();
-      });
-    });
-    self.open_file_task = Some(task);
-    self.focus_editor_if_asked(intent, window, cx);
-    cx.notify();
-  }
-
-  /// A file as the pull request proposes it: the merge base against the head,
-  /// read-only. Comments on it go to GitHub, never to the agent, because the
-  /// agent edits the working tree and that is a different content.
-  pub(super) fn open_pull_request_file(
-    &mut self,
-    base_oid: String,
-    head_oid: String,
-    rel_path: PathBuf,
-    reveal_line: Option<u32>,
-    intent: OpenIntent,
-    window: &mut Window,
-    cx: &mut Context<Self>,
-  ) {
-    self.open_pull_request_file_without_unsaved_prompt(
-      base_oid,
-      head_oid,
-      rel_path,
-      reveal_line,
-      intent,
-      window,
-      cx,
-    );
-  }
-
-  fn open_pull_request_file_without_unsaved_prompt(
-    &mut self,
-    base_oid: String,
-    head_oid: String,
-    rel_path: PathBuf,
-    reveal_line: Option<u32>,
-    intent: OpenIntent,
-    window: &mut Window,
-    cx: &mut Context<Self>,
-  ) {
-    self.cache_warm_editor();
-    let Some(repo_root) = self.checkout_root(cx) else {
-      return;
-    };
-    let reveal_doc_line = reveal_line.map(|line| line.saturating_sub(1) as usize);
-    self.show_preview = false;
-    self.center = CenterView::Diff;
-    self.diff_chat_open = false;
-    self.sync_agent_chat_close_control(cx);
-    // Another comment on the file already open: reveal, do not reload.
-    if self.warm_opened_snapshot()
-      == Some(&OpenedSnapshot::PullRequestRange {
-        base: base_oid.clone(),
-        head: head_oid.clone(),
-      })
-      && self.warm_selected_file() == Some(rel_path.as_path())
-      && let Some(editor) = self.warm_editor()
-    {
-      if let Some(doc_line) = reveal_doc_line {
-        editor.update(cx, |editor, cx| editor.reveal_source_line(doc_line, cx));
-      }
-      self.focus_editor_if_asked(intent, window, cx);
-      cx.notify();
-      return;
-    }
-    self.leave_commit_file(cx);
-    let tab =
-      CenterTab::pull_request_snapshot(rel_path.clone(), base_oid.clone(), head_oid.clone());
-    let reveal_doc_position = reveal_line.map(|line| (line.saturating_sub(1) as usize, 0));
-    if self.restore_center_editor(
-      &tab,
-      &rel_path,
-      reveal_doc_position,
-      None,
-      intent,
-      window,
-      cx,
-    ) {
-      return;
-    }
-    self.open_file_generation = self.open_file_generation.wrapping_add(1);
-    let generation = self.open_file_generation;
-    self.remember_center_tab(tab.clone(), cx);
-    self.reveal_center_tab_in_files_panel(&tab, cx);
-    let opened_snapshot = OpenedSnapshot::PullRequestRange {
-      base: base_oid.clone(),
-      head: head_oid.clone(),
-    };
-    self.set_editor_tab_loading(tab.clone(), rel_path.clone(), Some(opened_snapshot.clone()));
-    let hide_whitespace = self.hide_whitespace;
-    let diff_view = self.effective_diff_view(&rel_path, cx);
-    let load_tab = tab.clone();
-
-    let task = cx.spawn(async move |this, cx| {
-      let load_repo_root = repo_root.clone();
-      let load_base = base_oid.clone();
-      let load_head = head_oid.clone();
-      let load_rel_path = rel_path.clone();
-      let range_file = cx
-        .background_spawn(async move {
-          git::load_range_file_diff(&load_repo_root, &load_base, &load_head, &load_rel_path)
-        })
-        .await;
-      let _ = this.update(cx, move |this, cx| {
-        if this.open_file_generation != generation {
-          return;
-        }
-        let Ok(range_file) = range_file else {
-          return;
-        };
-
-        let file_path = repo_root.join(&rel_path);
-        let editor = cx.new(|cx| Editor::new_with_paths(repo_root.clone(), file_path, cx));
-        let diff_set = if range_file.patch.trim().is_empty() {
-          None
-        } else {
-          git::diff_set_from_patch(&range_file.patch).ok()
-        };
-        editor.update(cx, |editor, cx| {
-          editor.load_readonly_snapshot(range_file.content, diff_set, cx);
-          editor.set_diff_view_mode(diff_view, cx);
-          editor.set_ignore_whitespace(hide_whitespace, cx);
-          if let Some(doc_line) = reveal_doc_line {
-            editor.reveal_source_line(doc_line, cx);
-          }
-        });
-        let binary_preview =
-          build_binary_preview(rel_path.as_path(), range_file.binary_bytes.clone());
-        this.set_editor_tab_state(
-          load_tab,
-          CenterEditorState {
-            selected_file: Some(rel_path.clone()),
-            file_modified: None,
-            editor: Some(editor.clone()),
-            binary_preview,
-            opened_snapshot: Some(opened_snapshot),
-          },
-        );
-        // The comments sync through the page's editor: install after it lands,
-        // or they hang on the one this replaces.
-        this.install_github_review_handlers_for_editor(&editor, cx);
         this.svg_preview.update(cx, |preview, _| preview.clear());
         cx.notify();
       });
@@ -2005,7 +1828,6 @@ impl SessionPage {
     }
     self.show_preview = !self.show_preview;
     self.sync_diff_view(cx);
-    self.sync_git_telemetry(cx);
     cx.notify();
   }
 
@@ -2319,7 +2141,6 @@ impl SessionPage {
       settings.split_diff_view = self.diff_view == DiffViewMode::Split
     });
     self.sync_diff_view(cx);
-    self.sync_git_telemetry(cx);
     cx.notify();
   }
 
@@ -2860,7 +2681,6 @@ impl SessionPage {
       self.open_unsaved_editor_dialog(UnsavedEditorAction::CloseWindow { tab }, window, cx);
       return false;
     }
-    crate::sentry_context::mark_closing();
     true
   }
 
@@ -2872,7 +2692,6 @@ impl SessionPage {
     if let Some(tab) = self.dirty_editor_tab(cx) {
       self.open_unsaved_editor_dialog(UnsavedEditorAction::Quit { tab }, window, cx);
     } else {
-      crate::sentry_context::mark_closing();
       cx.quit();
     }
   }

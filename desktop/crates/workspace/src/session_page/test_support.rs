@@ -1,8 +1,6 @@
 //! Shared fixtures for the shell tests.
 
 use super::*;
-use crate::github_notifications::GithubNotificationsStore;
-use crate::workspace::WorkspaceApi;
 use editor::{ReviewCommentMode, ReviewCommentSide};
 use gpui::{Context, IntoElement, Render, TestAppContext, Window, div};
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -52,15 +50,6 @@ pub(crate) fn add_session_page_window(
     if !cx.has_global::<crate::config::AppSettings>() {
       cx.set_global(crate::config::AppSettings::default());
     }
-    if !cx.has_global::<AuthStateStore>() {
-      cx.set_global(AuthStateStore::default());
-    }
-    if !cx.has_global::<GithubNotificationsStore>() {
-      cx.set_global(GithubNotificationsStore::default());
-    }
-    if !cx.has_global::<WorkspaceApi>() {
-      cx.set_global(WorkspaceApi::new());
-    }
   });
 
   let mut mounted: Option<Entity<SessionPage>> = None;
@@ -92,15 +81,6 @@ fn mount_session_page_window(
     gpui_component::init(cx);
     if !cx.has_global::<crate::config::AppSettings>() {
       cx.set_global(crate::config::AppSettings::default());
-    }
-    if !cx.has_global::<AuthStateStore>() {
-      cx.set_global(AuthStateStore::default());
-    }
-    if !cx.has_global::<GithubNotificationsStore>() {
-      cx.set_global(GithubNotificationsStore::default());
-    }
-    if !cx.has_global::<WorkspaceApi>() {
-      cx.set_global(WorkspaceApi::new());
     }
   });
 
@@ -168,26 +148,6 @@ pub(super) async fn await_editor_diff(
       return;
     }
   }
-}
-
-pub(super) fn surface_pull_request(number: u64) -> crate::dock_panel::BranchPrState {
-  crate::dock_panel::BranchPrState::Found(
-    crate::pull_request_dialog::GithubBranchContext {
-      owner: "acme".to_string(),
-      repo: "widget".to_string(),
-      branch: "feature".to_string(),
-    },
-    Box::new(
-      serde_json::from_value(serde_json::json!({
-        "number": number,
-        "title": "Add widgets",
-        "state": "open",
-        "draft": false,
-        "repository": { "owner": "acme", "repo": "widget" }
-      }))
-      .expect("build pull request"),
-    ),
-  )
 }
 
 pub(super) fn create_request(line: usize, body: &str) -> ReviewCommentCreateRequest {

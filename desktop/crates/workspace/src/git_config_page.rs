@@ -22,7 +22,7 @@ use ui::{
   CommandPaletteHandler, CommandPalettePage, PAGE_HEADER_HEIGHT, StatusThemeExt, WindowExt,
 };
 
-use crate::{ShowCommandPalette, auth_state::AuthStateStore, file_view::render_file_title};
+use crate::{ShowCommandPalette, file_view::render_file_title};
 
 const GIT_CONFIG_DIALOG_MAX_WIDTH: f32 = 1120.0;
 const GIT_CONFIG_DIALOG_MAX_HEIGHT: f32 = 780.0;
@@ -116,14 +116,9 @@ impl GitConfigPage {
   }
 
   fn open_command_palette(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-    let include_github = AuthStateStore::has_github_access(cx);
-    let signed_in = AuthStateStore::is_signed_in(cx);
     let commands = crate::shortcuts::with_palette_keybindings(
       CommandPaletteCommand::default_global_commands(ui::GlobalCommandsContext {
         current_page: CommandPalettePage::GitConfig,
-        include_github,
-        signed_in,
-        has_subscription: AuthStateStore::has_subscription(cx),
       }),
       window,
       cx,

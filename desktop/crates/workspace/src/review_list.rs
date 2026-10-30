@@ -82,16 +82,17 @@ impl ReviewSection {
 pub(crate) enum ReviewRowStatus {
   Draft,
   Sent,
+  // The pull-request review section is kept but dormant now that GitHub is
+  // gone, so nothing in the app constructs these two outside tests.
+  // ponytail: dormant with the PR section.
+  #[allow(dead_code)]
   Pending,
-  /// A pull request comment the diff moved under: GitHub keeps it, anchored to
-  /// the line it was written against.
+  #[allow(dead_code)]
   Outdated,
 }
 
 pub(crate) fn review_row_status_label(status: ReviewRowStatus) -> Option<&'static str> {
   match status {
-    // The ordinary case says nothing, and a pending comment has its section to
-    // say it for the whole list.
     ReviewRowStatus::Draft | ReviewRowStatus::Pending => None,
     ReviewRowStatus::Sent => Some("Sent"),
     ReviewRowStatus::Outdated => Some("Outdated"),
@@ -429,8 +430,10 @@ impl ReviewList {
     self.sections().next().is_none() && !self.pull_request_loading
   }
 
-  /// While the GitHub round-trip runs, an empty panel says loading instead of
-  /// pretending the review has no comments.
+  // The pull-request review section is kept but dormant now that GitHub is
+  // gone; these setters are exercised only by its tests.
+  // ponytail: dormant with the PR section.
+  #[allow(dead_code)]
   pub(crate) fn set_pull_request_loading(&mut self, loading: bool, cx: &mut Context<Self>) {
     if self.pull_request_loading != loading {
       self.pull_request_loading = loading;
@@ -438,6 +441,7 @@ impl ReviewList {
     }
   }
 
+  #[allow(dead_code)]
   pub(crate) fn set_pull_request_number(&mut self, number: Option<u64>, cx: &mut Context<Self>) {
     if self.pull_request_number != number {
       self.pull_request_number = number;

@@ -9,7 +9,6 @@ use std::{
 };
 
 use crate::AppProfile;
-use crate::api::GithubPullRequestMergeMethod;
 use crate::shortcuts::ShortcutId;
 use app_log::ResultExt;
 use dirs::config_dir;
@@ -61,11 +60,6 @@ const COMMAND_USAGES_TABLE: ConfigTable = ConfigTable {
   create_sql: "CREATE TABLE IF NOT EXISTS command_usages (command_id TEXT PRIMARY KEY, recent_timestamps TEXT NOT NULL)",
 };
 
-const ANALYTICS_META_TABLE: ConfigTable = ConfigTable {
-  name: "analytics_meta",
-  create_sql: "CREATE TABLE IF NOT EXISTS analytics_meta (id INTEGER PRIMARY KEY CHECK (id = 1), device_id TEXT NOT NULL)",
-};
-
 const MERGE_METHODS_TABLE: ConfigTable = ConfigTable {
   name: "merge_methods",
   create_sql: "CREATE TABLE IF NOT EXISTS merge_methods (repo TEXT PRIMARY KEY, method TEXT NOT NULL)",
@@ -83,10 +77,9 @@ const UNTITLED_BUFFERS_TABLE: ConfigTable = ConfigTable {
 
 pub const COMMAND_USAGE_TIMESTAMP_CAP: usize = 30;
 
-const CONFIG_TABLES: [ConfigTable; 6] = [
+const CONFIG_TABLES: [ConfigTable; 5] = [
   PROJECTS_TABLE,
   COMMAND_USAGES_TABLE,
-  ANALYTICS_META_TABLE,
   MERGE_METHODS_TABLE,
   CENTER_WORKSPACES_TABLE,
   UNTITLED_BUFFERS_TABLE,
@@ -255,23 +248,6 @@ fn migrate_v10_untitled_buffers(conn: &Connection) -> rusqlite::Result<()> {
   Ok(())
 }
 
-fn merge_method_storage_key(method: GithubPullRequestMergeMethod) -> &'static str {
-  match method {
-    GithubPullRequestMergeMethod::Merge => "merge",
-    GithubPullRequestMergeMethod::Squash => "squash",
-    GithubPullRequestMergeMethod::Rebase => "rebase",
-  }
-}
-
-fn merge_method_from_storage(value: &str) -> Option<GithubPullRequestMergeMethod> {
-  match value {
-    "merge" => Some(GithubPullRequestMergeMethod::Merge),
-    "squash" => Some(GithubPullRequestMergeMethod::Squash),
-    "rebase" => Some(GithubPullRequestMergeMethod::Rebase),
-    _ => None,
-  }
-}
-
 fn create_baseline_tables(conn: &Connection) -> rusqlite::Result<()> {
   for table in CONFIG_TABLES {
     conn.execute(table.create_sql, [])?;
@@ -301,7 +277,6 @@ fn ensure_settings_columns(conn: &Connection) -> rusqlite::Result<()> {
     ("split_diff_view", "INTEGER NOT NULL DEFAULT 0"),
     ("hide_whitespace", "INTEGER NOT NULL DEFAULT 0"),
     ("menu_bar_icon", "INTEGER NOT NULL DEFAULT 1"),
-    ("analytics_enabled", "INTEGER NOT NULL DEFAULT 1"),
   ];
 
   for (column, definition) in COLUMNS {
@@ -401,7 +376,6 @@ pub struct AppSettings {
   pub files_show_gitignored: bool,
   pub files_show_hidden: bool,
   pub menu_bar_icon: bool,
-  pub analytics_enabled: bool,
   pub onboarding_done: bool,
   pub find_case_sensitive: bool,
   pub find_whole_word: bool,
@@ -459,7 +433,6 @@ impl Default for AppSettings {
       files_show_gitignored: true,
       files_show_hidden: true,
       menu_bar_icon: true,
-      analytics_enabled: true,
       onboarding_done: false,
       find_case_sensitive: false,
       find_whole_word: false,
@@ -836,40 +809,6 @@ impl ConfigStore {
     paths
   }
 
-  /// The merge method last used on this repository, GitHub's own memory being
-  /// out of reach.
-  pub fn load_merge_method(repo: &str) -> Option<GithubPullRequestMergeMethod> {
-    let store = Self::open_with_tables()?;
-    let value: Option<String> = store
-      .conn
-      .query_row(
-        &format!(
-          "SELECT method FROM {} WHERE repo = ?1",
-          MERGE_METHODS_TABLE.name
-        ),
-        params![repo],
-        |row| row.get(0),
-      )
-      .ok();
-    value.as_deref().and_then(merge_method_from_storage)
-  }
-
-  pub fn persist_merge_method(repo: &str, method: GithubPullRequestMergeMethod) {
-    let Some(store) = Self::open_with_tables() else {
-      return;
-    };
-    if let Err(err) = store.conn.execute(
-      &format!(
-        "INSERT INTO {} (repo, method) VALUES (?1, ?2)
-         ON CONFLICT(repo) DO UPDATE SET method = excluded.method",
-        MERGE_METHODS_TABLE.name
-      ),
-      params![repo, merge_method_storage_key(method)],
-    ) {
-      log::warn!("Failed to persist merge method: {}", err);
-    }
-  }
-
   pub fn create_untitled_buffer(checkout_path: &Path, state: &str) -> anyhow::Result<u64> {
     let store = Self::open_with_tables()
       .ok_or_else(|| anyhow::anyhow!("Could not open the local draft database"))?;
@@ -1022,7 +961,7 @@ impl ConfigStore {
 
     let settings = self.conn.query_row(
       &format!(
-        "SELECT auto_switch_theme, dark_mode, indent_rainbow, font_size, git_unified_file_view, split_diff_view, hide_whitespace, menu_bar_icon, analytics_enabled FROM {} WHERE id = 1",
+        "SELECT auto_switch_theme, dark_mode, indent_rainbow, font_size, git_unified_file_view, split_diff_view, hide_whitespace, menu_bar_icon FROM {} WHERE id = 1",
         SETTINGS_TABLE.name
       ),
       [],
@@ -1035,7 +974,6 @@ impl ConfigStore {
         let split_diff_view: i64 = row.get(5)?;
         let hide_whitespace: i64 = row.get(6)?;
         let menu_bar_icon: i64 = row.get(7)?;
-        let analytics_enabled: i64 = row.get(8)?;
         Ok(AppSettings {
           auto_switch_theme: auto_switch_theme != 0,
           dark_mode: dark_mode != 0,
@@ -1049,7 +987,6 @@ impl ConfigStore {
           files_show_gitignored: true,
           files_show_hidden: true,
           menu_bar_icon: menu_bar_icon != 0,
-          analytics_enabled: analytics_enabled != 0,
           onboarding_done: false,
           find_case_sensitive: false,
           find_whole_word: false,
@@ -1071,39 +1008,6 @@ impl ConfigStore {
   #[cfg(test)]
   pub fn persist_app_settings(settings: AppSettings) {
     crate::settings_file::persist(settings);
-  }
-
-  pub fn load_or_create_analytics_device_id() -> Option<String> {
-    let store = Self::open_with_tables()?;
-    store.load_or_create_analytics_device_id_inner()
-  }
-
-  fn load_or_create_analytics_device_id_inner(&self) -> Option<String> {
-    let existing: rusqlite::Result<String> = self.conn.query_row(
-      &format!(
-        "SELECT device_id FROM {} WHERE id = 1",
-        ANALYTICS_META_TABLE.name
-      ),
-      [],
-      |row| row.get::<_, String>(0),
-    );
-    if let Ok(id) = existing {
-      return Some(id);
-    }
-
-    let id = uuid::Uuid::new_v4().to_string();
-    if let Err(err) = self.conn.execute(
-      &format!(
-        "INSERT INTO {} (id, device_id) VALUES (1, ?1)
-         ON CONFLICT(id) DO UPDATE SET device_id = excluded.device_id",
-        ANALYTICS_META_TABLE.name
-      ),
-      params![id],
-    ) {
-      log::warn!("Failed to persist analytics device id: {}", err);
-      return None;
-    }
-    Some(id)
   }
 
   pub fn load_command_usages() -> HashMap<String, Vec<i64>> {
@@ -1481,35 +1385,6 @@ mod tests {
   }
 
   #[test]
-  fn merge_method_round_trips_per_repository() {
-    let db_path = unique_test_db_path("merge-method");
-    let _ = fs::remove_file(&db_path);
-    ConfigStore::set_test_db_path(Some(db_path));
-
-    assert_eq!(ConfigStore::load_merge_method("acme/widget"), None);
-
-    ConfigStore::persist_merge_method("acme/widget", GithubPullRequestMergeMethod::Squash);
-    ConfigStore::persist_merge_method("acme/gadget", GithubPullRequestMergeMethod::Rebase);
-    assert_eq!(
-      ConfigStore::load_merge_method("acme/widget"),
-      Some(GithubPullRequestMergeMethod::Squash)
-    );
-    assert_eq!(
-      ConfigStore::load_merge_method("acme/gadget"),
-      Some(GithubPullRequestMergeMethod::Rebase)
-    );
-
-    // The last choice wins, one row per repository.
-    ConfigStore::persist_merge_method("acme/widget", GithubPullRequestMergeMethod::Merge);
-    assert_eq!(
-      ConfigStore::load_merge_method("acme/widget"),
-      Some(GithubPullRequestMergeMethod::Merge)
-    );
-
-    ConfigStore::set_test_db_path(None);
-  }
-
-  #[test]
   fn center_workspace_round_trips_per_checkout() {
     let db_path = unique_test_db_path("center-workspace");
     let _ = fs::remove_file(&db_path);
@@ -1539,15 +1414,6 @@ mod tests {
     assert_eq!(ConfigStore::load_center_workspace(&second), None);
 
     ConfigStore::set_test_db_path(None);
-  }
-
-  #[test]
-  fn a_merge_method_this_build_does_not_know_reads_as_nothing() {
-    assert_eq!(merge_method_from_storage("rocket"), None);
-    assert_eq!(
-      merge_method_from_storage("squash"),
-      Some(GithubPullRequestMergeMethod::Squash)
-    );
   }
 
   #[test]
@@ -1683,7 +1549,6 @@ mod tests {
       files_show_gitignored: false,
       files_show_hidden: false,
       menu_bar_icon: false,
-      analytics_enabled: false,
       onboarding_done: true,
       find_case_sensitive: true,
       find_whole_word: true,
@@ -1868,7 +1733,6 @@ mod tests {
   const FINAL_CONFIG_TABLES: &[&str] = &[
     "projects",
     "command_usages",
-    "analytics_meta",
     "merge_methods",
     "center_workspaces",
     "untitled_buffers",
@@ -1948,9 +1812,6 @@ mod tests {
       conn
         .execute(COMMAND_USAGES_TABLE.create_sql, [])
         .expect("command usages");
-      conn
-        .execute(ANALYTICS_META_TABLE.create_sql, [])
-        .expect("analytics meta");
       set_schema_version(&conn, 7).expect("stamp v7");
     }
 

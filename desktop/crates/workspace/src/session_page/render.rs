@@ -343,7 +343,6 @@ impl SessionPage {
       .min_h_0()
       .bg(theme.sidebar)
       .child(div().flex_1().min_h_0().child(self.session_list.clone()))
-      .child(self.inbox.clone())
       .children(repo_context)
       .into_any_element()
   }
@@ -593,7 +592,6 @@ impl SessionPage {
         let prefix = match tab.snapshot() {
           Some(CenterTabSnapshot::AgentTool { .. }) => "Agent: ",
           Some(CenterTabSnapshot::Commit { .. }) => "Commit: ",
-          Some(CenterTabSnapshot::PullRequestRange { .. }) => "PR: ",
           None if tab.kind == CenterTabKind::Diff => "Diff: ",
           None => "",
         };
@@ -1290,6 +1288,7 @@ impl SessionPage {
         .or_else(|| (icon_chat_ids.len() == 1).then(|| icon_chat_ids[0].clone()));
 
       let accessibility_label = label.clone();
+      let closeable = self.center_group_is_closeable(tab);
       let tab_debug_selector = Self::center_tab_debug_selector(tab);
       let page = cx.entity().clone();
       let menu_tab = tab.clone();
@@ -1320,6 +1319,16 @@ impl SessionPage {
         .when(dirty, |this| this.child(render_dirty_indicator(cx)))
         .when_some(status, |this, status| {
           this.child(Self::render_center_tab_status(status, &theme))
+        })
+        .when(closeable, |this| {
+          let close_tab = tab.clone();
+          this.on_mouse_down(
+            gpui::MouseButton::Middle,
+            cx.listener(move |this, _, window, cx| {
+              cx.stop_propagation();
+              this.close_center_tab(close_tab.clone(), window, cx);
+            }),
+          )
         })
         .context_menu(move |menu, _, cx| {
           Self::build_center_tab_context_menu(
@@ -1379,7 +1388,7 @@ impl SessionPage {
               cx.stop_propagation();
             }))
         });
-      if self.center_group_is_closeable(tab) {
+      if closeable {
         let close_tab = tab.clone();
         let close_label = format!(
           "{:?}-{:?}-{}",
@@ -1440,6 +1449,20 @@ impl SessionPage {
       .flex_shrink_0()
       .relative()
       .bg(cx.theme().background)
+      // The tab strip scrolls horizontally, but a plain wheel only has a y
+      // delta and the bar locks its scroll axis, so translate wheel-y into a
+      // horizontal scroll ourselves (no shift needed).
+      .on_scroll_wheel(
+        cx.listener(|this, event: &gpui::ScrollWheelEvent, window, cx| {
+          let delta = event.delta.pixel_delta(window.line_height());
+          if delta.y != px(0.) && delta.x == px(0.) {
+            let mut offset = this.center_tabs_scroll_handle.offset();
+            offset.x += delta.y;
+            this.center_tabs_scroll_handle.set_offset(offset);
+            cx.notify();
+          }
+        }),
+      )
       .child(
         div()
           .debug_selector(|| "session-center-tab-header-border".to_string())
@@ -2147,7 +2170,6 @@ impl SessionPage {
         });
     }
     self.sync_editor_unmerged_state(cx);
-    self.sync_git_telemetry(cx);
     self.focus_editor_on_next_frame(window, cx);
     self.persist_current_center_workspace(cx);
     cx.notify();
@@ -2856,14 +2878,12 @@ pub(crate) fn dock_rail_tab_has_news(
   tab: DockPanelTab,
   changed_files: usize,
   pending_review: usize,
-  pending_pull_request_comments: usize,
 ) -> bool {
   match tab {
     DockPanelTab::Changes => changed_files > 0,
-    // Work waiting to be sent, wherever it goes: the agent's drafts, or the
-    // comments of an unsubmitted pull request review.
-    DockPanelTab::Review => pending_review > 0 || pending_pull_request_comments > 0,
-    DockPanelTab::Files | DockPanelTab::History | DockPanelTab::PullRequest => false,
+    // The agent's drafts waiting to be sent.
+    DockPanelTab::Review => pending_review > 0,
+    DockPanelTab::Files | DockPanelTab::History => false,
   }
 }
 
@@ -2998,7 +3018,6 @@ impl SessionPage {
       DockPanelTab::Review => Box::new(crate::OpenReviewSidebar),
       DockPanelTab::Files => Box::new(crate::OpenFilesSidebar),
       DockPanelTab::History => Box::new(crate::OpenGitHistorySidebar),
-      DockPanelTab::PullRequest => Box::new(crate::OpenPullRequestSidebar),
     }
   }
 
@@ -3026,7 +3045,7 @@ impl SessionPage {
       gpui_component::Icon,
       &'static str,
       DockPanelTab,
-    ); 5] = [
+    ); 4] = [
       (
         "dock-rail-changes",
         gpui_component::Icon::new(UiIconName::FileDiff),
@@ -3051,12 +3070,6 @@ impl SessionPage {
         "History",
         DockPanelTab::History,
       ),
-      (
-        "dock-rail-pull-request",
-        gpui_component::Icon::new(UiIconName::GitPullRequest),
-        "Pull request",
-        DockPanelTab::PullRequest,
-      ),
     ];
     let mut rail = v_flex().items_center().gap_1().pt_2().w_full().child(
       Self::rail_button(
@@ -3078,10 +3091,6 @@ impl SessionPage {
       })),
     );
     let pending_review = self.draft_review_comment_count();
-    let pending_pull_request_comments = self
-      .dock_panel
-      .read(cx)
-      .pending_pull_request_comment_count();
     let changed_files = self.dock_panel.read(cx).status_entries().len();
     // Include the generation so tooltips ignore superseded shortcut bindings.
     let shortcut_context = crate::shortcuts::current_workspace_key_context(cx);
@@ -3093,13 +3102,7 @@ impl SessionPage {
         .on_click(cx.listener(move |this, _, window, cx| {
           this.open_dock_tab(tab, window, cx);
         }));
-      let badge = dock_rail_tab_has_news(
-        tab,
-        changed_files,
-        pending_review,
-        pending_pull_request_comments,
-      )
-      .then(|| {
+      let badge = dock_rail_tab_has_news(tab, changed_files, pending_review).then(|| {
         div()
           .absolute()
           .top(px(0.0))
@@ -3186,7 +3189,6 @@ impl Render for SessionPage {
       .on_action(cx.listener(Self::open_changes_action))
       .on_action(cx.listener(Self::open_files_action))
       .on_action(cx.listener(Self::open_review_action))
-      .on_action(cx.listener(Self::open_pull_request_action))
       .on_action(cx.listener(Self::return_focus_to_editor_action))
       .on_action(cx.listener(Self::toggle_file_stage_action))
       .on_action(cx.listener(Self::restore_file_action))
@@ -4154,9 +4156,10 @@ mod tests {
   #[gpui::test]
   async fn a_binary_preview_keeps_workspace_shortcuts_alive(cx: &mut TestAppContext) {
     let repo = TempRepo::init("session-page-binary-preview-focus");
+    // Any binary (non-UTF-8) bytes stand in for an image here.
     std::fs::write(
       repo.path.join("asset.png"),
-      crate::workspace::STATUS_BAR_ICON_PNG,
+      [0x89, b'P', b'N', b'G', 0x00, 0xFF],
     )
     .expect("write image");
 
@@ -5027,28 +5030,7 @@ mod tests {
         page.dock_panel.read(cx).active_tab(),
         crate::dock_panel::DockPanelTab::Review
       );
-    });
-
-    page.update_in(cx, |page, window, cx| {
-      page.open_pull_request_action(&crate::OpenPullRequestSidebar, window, cx)
-    });
-    cx.run_until_parked();
-    page.read_with(cx, |page, cx| {
-      assert_eq!(
-        page.dock_panel.read(cx).active_tab(),
-        crate::dock_panel::DockPanelTab::PullRequest
-      );
       assert!(page.dock_open, "the dock opens on the tab it was asked for");
-    });
-
-    // Nothing to focus in an empty pull request tab, so the panel holds it and
-    // the same shortcut sends the dock away.
-    page.update_in(cx, |page, window, cx| {
-      page.open_pull_request_action(&crate::OpenPullRequestSidebar, window, cx)
-    });
-    cx.run_until_parked();
-    page.read_with(cx, |page, _| {
-      assert!(!page.dock_open, "the same shortcut closes what it opened");
     });
   }
 
@@ -9603,19 +9585,13 @@ mod tests {
 
   #[test]
   fn only_the_tabs_holding_work_wear_a_dot() {
-    assert!(dock_rail_tab_has_news(DockPanelTab::Changes, 2, 0, 0));
-    assert!(!dock_rail_tab_has_news(DockPanelTab::Changes, 0, 3, 0));
-    assert!(dock_rail_tab_has_news(DockPanelTab::Review, 0, 3, 0));
-    assert!(!dock_rail_tab_has_news(DockPanelTab::Review, 2, 0, 0));
-    // An unsubmitted pull request review is work waiting to go out too.
-    assert!(dock_rail_tab_has_news(DockPanelTab::Review, 0, 0, 1));
+    assert!(dock_rail_tab_has_news(DockPanelTab::Changes, 2, 0));
+    assert!(!dock_rail_tab_has_news(DockPanelTab::Changes, 0, 3));
+    assert!(dock_rail_tab_has_news(DockPanelTab::Review, 0, 3));
+    assert!(!dock_rail_tab_has_news(DockPanelTab::Review, 2, 0));
 
-    for tab in [
-      DockPanelTab::Files,
-      DockPanelTab::History,
-      DockPanelTab::PullRequest,
-    ] {
-      assert!(!dock_rail_tab_has_news(tab, 5, 5, 5));
+    for tab in [DockPanelTab::Files, DockPanelTab::History] {
+      assert!(!dock_rail_tab_has_news(tab, 5, 5));
     }
   }
 
@@ -9728,27 +9704,6 @@ mod tests {
   }
 
   #[gpui::test]
-  async fn the_pull_request_tab_keeps_its_place_without_github(cx: &mut TestAppContext) {
-    let repo = TempRepo::init("session-dock-rail-no-github");
-    commit_text_file(&repo.path, Path::new("README.md"), "v1\n", "initial");
-    let (page, cx) = add_session_page_window(repo.path.clone(), cx);
-    cx.run_until_parked();
-
-    page.update_in(cx, |page, window, cx| {
-      page.open_changes_action(&crate::OpenGitChangesSidebar, window, cx)
-    });
-    page.update(cx, |page, cx| {
-      page.dock_slide_armed = false;
-      cx.notify();
-    });
-    cx.run_until_parked();
-
-    // Icons that come and go with the remote make the rail unlearnable, and the
-    // panel behind this one is a promotion surface.
-    assert!(cx.debug_bounds("dock-rail-pull-request").is_some());
-  }
-
-  #[gpui::test]
   fn dock_rail_tooltips_resolve_current_shortcuts_and_overrides(cx: &mut TestAppContext) {
     use crate::shortcuts::{self, ShortcutId};
 
@@ -9761,10 +9716,6 @@ mod tests {
       (DockPanelTab::Review, ShortcutId::OpenReviewSidebar),
       (DockPanelTab::Files, ShortcutId::OpenFilesSidebar),
       (DockPanelTab::History, ShortcutId::OpenGitHistorySidebar),
-      (
-        DockPanelTab::PullRequest,
-        ShortcutId::OpenPullRequestSidebar,
-      ),
     ] {
       let default = shortcuts::shortcut_keystroke(shortcut);
       for expected in [
