@@ -32,7 +32,9 @@ pub(crate) enum RepoCommand {
   },
   SwitchBranch(BranchRef),
   /// A branch named without knowing where it lives: fetches and creates the
-  /// tracking branch when only the remote has it.
+  /// tracking branch when only the remote has it. Its only caller was the
+  /// GitHub pull-request checkout flow. ponytail: dormant, no UI entry now.
+  #[allow(dead_code)]
   SwitchToBranchName {
     name: String,
   },
@@ -217,38 +219,9 @@ impl RepoCommand {
     }
   }
 
-  /// Sentry key for the failures of this command.
-  pub(crate) fn telemetry_key(&self) -> &'static str {
-    match self {
-      Self::StageAll => "git.stage_all",
-      Self::UnstageAll => "git.unstage_all",
-      Self::Push => "git.push",
-      Self::ForcePush => "git.force_push",
-      Self::Pull => "git.pull",
-      Self::Fetch => "git.fetch",
-      Self::UndoLastCommit => "git.undo_last_commit",
-      Self::Amend { .. } => "git.amend",
-      Self::CheckoutDetached { .. } => "git.checkout_detached",
-      Self::SwitchBranch(_) | Self::SwitchToBranchName { .. } => "git.switch_branch",
-      Self::CreateBranch { .. }
-      | Self::CreateBranchFrom { .. }
-      | Self::CreateBranchFromCommit { .. } => "git.create_branch",
-      Self::DeleteBranch(_) => "git.delete_branch",
-      Self::MergeBranch(_) => "git.merge",
-      Self::AbortMerge => "git.merge.abort",
-      Self::RebaseBranch(_) => "git.rebase",
-      Self::ContinueRebase => "git.rebase.continue",
-      Self::SkipRebase => "git.rebase.skip",
-      Self::AbortRebase => "git.rebase.abort",
-      Self::Stash { .. } => "git.stash",
-      Self::ApplyStash { .. } => "git.stash.apply",
-      Self::PopStash { .. } => "git.stash.pop",
-      Self::DropStash { .. } => "git.stash.drop",
-      Self::CherryPick { .. } => "git.cherry_pick",
-    }
-  }
-
-  /// Breadcrumb name, used as "<label> started" / "<label> failed".
+  /// Human-readable name for this command. Used only by tests now that the
+  /// breadcrumb/menu callers are gone. ponytail: kept for test diagnostics.
+  #[allow(dead_code)]
   pub(crate) fn label(&self) -> &'static str {
     match self {
       Self::StageAll => "Stage all",
@@ -276,37 +249,6 @@ impl RepoCommand {
       Self::PopStash { .. } => "Pop stash",
       Self::DropStash { .. } => "Drop stash",
       Self::CherryPick { .. } => "Cherry-pick",
-    }
-  }
-
-  pub(crate) fn analytics_event(&self) -> Option<&'static str> {
-    match self {
-      Self::Fetch => Some("fetch_done"),
-      Self::Push => Some("push_done"),
-      Self::ForcePush => Some("force_push_done"),
-      Self::RebaseBranch(_) => Some("rebase_done"),
-      Self::Stash { .. } => Some("stash_created"),
-      Self::CherryPick { .. } => Some("cherry_pick_done"),
-      Self::StageAll
-      | Self::UnstageAll
-      | Self::Pull
-      | Self::UndoLastCommit
-      | Self::Amend { .. }
-      | Self::CheckoutDetached { .. }
-      | Self::SwitchBranch(_)
-      | Self::SwitchToBranchName { .. }
-      | Self::CreateBranch { .. }
-      | Self::CreateBranchFrom { .. }
-      | Self::CreateBranchFromCommit { .. }
-      | Self::DeleteBranch(_)
-      | Self::MergeBranch(_)
-      | Self::AbortMerge
-      | Self::ContinueRebase
-      | Self::SkipRebase
-      | Self::AbortRebase
-      | Self::ApplyStash { .. }
-      | Self::PopStash { .. }
-      | Self::DropStash { .. } => None,
     }
   }
 }

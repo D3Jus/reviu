@@ -22,7 +22,6 @@ use ui::{
 
 use crate::{
   ShowCommandPalette,
-  auth_state::AuthStateStore,
   config::AppSettings as PersistedSettings,
   shortcuts::{
     self, ShortcutCategory, ShortcutDefinition, ShortcutId, ShortcutOverrides,
@@ -119,7 +118,6 @@ pub struct SettingsPage {
   enabled_agents: Vec<agent_registry::AgentId>,
   default_agent_select: Entity<SelectState<Vec<AgentSelectOption>>>,
   menu_bar_icon: bool,
-  analytics_enabled: bool,
   shortcut_recording: Option<ShortcutId>,
   shortcut_error: Option<ShortcutCaptureError>,
   size: Size,
@@ -175,7 +173,6 @@ impl SettingsPage {
       enabled_agents: agent_settings.enabled_agents,
       default_agent_select,
       menu_bar_icon: settings.menu_bar_icon,
-      analytics_enabled: settings.analytics_enabled,
       shortcut_recording: None,
       shortcut_error: None,
       size: Size::default(),
@@ -197,8 +194,7 @@ impl SettingsPage {
       || self.hide_whitespace != settings.hide_whitespace
       || self.files_show_gitignored != settings.files_show_gitignored
       || self.files_show_hidden != settings.files_show_hidden
-      || self.menu_bar_icon != settings.menu_bar_icon
-      || self.analytics_enabled != settings.analytics_enabled;
+      || self.menu_bar_icon != settings.menu_bar_icon;
     if !changed {
       return;
     }
@@ -212,7 +208,6 @@ impl SettingsPage {
     self.files_show_gitignored = settings.files_show_gitignored;
     self.files_show_hidden = settings.files_show_hidden;
     self.menu_bar_icon = settings.menu_bar_icon;
-    self.analytics_enabled = settings.analytics_enabled;
     cx.notify();
   }
 
@@ -263,7 +258,6 @@ impl SettingsPage {
     let default_files_show_gitignored = self.files_show_gitignored;
     let default_files_show_hidden = self.files_show_hidden;
     let default_menu_bar_icon = self.menu_bar_icon;
-    let default_analytics_enabled = self.analytics_enabled;
 
     vec![
       SettingPage::new("General").default_open(true).groups(vec![
@@ -474,31 +468,6 @@ impl SettingsPage {
           )
           .description(
             "Show all changed files in a single list instead of separate staged/unstaged groups.",
-          ),
-        ]),
-        SettingGroup::new().title("Privacy").items(vec![
-          SettingItem::new(
-            "Send Anonymous Usage Data",
-            SettingField::checkbox(
-              {
-                let view = view.clone();
-                move |cx: &App| view.read(cx).analytics_enabled
-              },
-              {
-                let view = view.clone();
-                move |val: bool, cx: &mut App| {
-                  view.update(cx, |view, _| {
-                    view.analytics_enabled = val;
-                  });
-
-                  PersistedSettings::update(cx, |s| s.analytics_enabled = val);
-                }
-              },
-            )
-            .default_value(default_analytics_enabled),
-          )
-          .description(
-            "Help improve Reviu by sending anonymous feature usage events (no repository, file, or account data). See the privacy policy on reviu.dev for details.",
           ),
         ]),
       ].into_iter().chain(self.menu_bar_settings_groups(view.clone(), default_menu_bar_icon))
@@ -939,14 +908,9 @@ impl SettingsPage {
   }
 
   fn open_command_palette(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-    let include_github = AuthStateStore::has_github_access(cx);
-    let signed_in = AuthStateStore::is_signed_in(cx);
     let commands = crate::shortcuts::with_palette_keybindings(
       CommandPaletteCommand::default_global_commands(ui::GlobalCommandsContext {
         current_page: CommandPalettePage::Settings,
-        include_github,
-        signed_in,
-        has_subscription: AuthStateStore::has_subscription(cx),
       }),
       window,
       cx,

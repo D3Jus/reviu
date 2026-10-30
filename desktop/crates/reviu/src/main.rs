@@ -8,18 +8,31 @@ use gpui_component::Root;
 #[cfg(target_os = "macos")]
 use gpui_component::TitleBar;
 use reqwest_client::ReqwestClient;
-use std::borrow::Cow;
 use std::sync::{Arc, mpsc};
-use std::time::Duration;
+use ui::AppAssets;
 #[cfg(target_os = "macos")]
 use ui::PAGE_HEADER_HEIGHT;
-use ui::{AppAssets, parse_github_url_action};
-use workspace::{
-  AppProfile, AuthStateStore, WorkspaceView, build_app_menus,
-  github_navigation::{PullRequestFallback, open_pull_request_target},
-  install_app_key_bindings, install_crash_reporter, show_startup_crash_report_notification,
-  take_pending_startup_crash_report,
-};
+use workspace::{AppProfile, WorkspaceView, build_app_menus, install_app_key_bindings};
+
+const DARCULA_THEME_JSON: &str = include_str!("darcula_theme.json");
+
+/// Register the bundled Darcula theme and make it the active dark theme.
+fn install_darcula_theme(cx: &mut App) {
+  use gpui_component::{Theme, ThemeRegistry};
+  if let Err(error) = ThemeRegistry::global_mut(cx).load_themes_from_str(DARCULA_THEME_JSON) {
+    log::error!("failed to load Darcula theme: {error:?}");
+    return;
+  }
+  let Some(darcula) = ThemeRegistry::global(cx).themes().get("Darcula").cloned() else {
+    return;
+  };
+  let theme = Theme::global_mut(cx);
+  theme.dark_theme = darcula;
+  // Re-apply the current mode so a dark session picks up Darcula immediately;
+  // later `Theme::change` calls keep it because `dark_theme` now points here.
+  let mode = theme.mode;
+  Theme::change(mode, None, cx);
+}
 
 #[cfg(target_os = "linux")]
 mod linux_single_instance {
@@ -203,10 +216,6 @@ mod windows_single_instance {
 mod app_root;
 const INITIAL_WINDOW_WIDTH: f32 = 1200.0;
 const INITIAL_WINDOW_HEIGHT: f32 = 800.0;
-const SENTRY_DSN: &str =
-  "https://a816f0ac9d37d42ec72719de4770c538@o1155685.ingest.us.sentry.io/4510920248918016";
-const SENTRY_ENABLE_DEV_ENV: &str = "SENTRY_ENABLE_DEV";
-const SENTRY_REDACTED: &str = "[REDACTED]";
 #[cfg(target_os = "macos")]
 const MACOS_TRAFFIC_LIGHT_X: f32 = 9.0;
 #[cfg(target_os = "macos")]
@@ -264,18 +273,7 @@ fn main() {
     }
   }
 
-  let traces_sample_rate = if cfg!(debug_assertions) { 1.0 } else { 0.1 };
-  let enabled = sentry_enabled();
-
-  if !enabled {
-    println!("Sentry error reporting is disabled.");
-  }
-
-  let _guard = sentry::init(sentry_client_options(enabled, traces_sample_rate));
-  install_crash_reporter();
-  let startup_crash_report = take_pending_startup_crash_report();
-
-  let (open_url_tx, open_url_rx) = mpsc::channel::<Vec<String>>();
+  let (open_url_tx, _open_url_rx) = mpsc::channel::<Vec<String>>();
 
   // On Linux, listen for deeplinks forwarded from other instances via Unix socket.
   #[cfg(target_os = "linux")]
@@ -303,6 +301,7 @@ fn main() {
   app.run(move |cx: &mut App| {
     gpui_component::init(cx);
     ui::init(cx);
+    install_darcula_theme(cx);
     if let Some(dir) = agent_registry::icon_cache_dir() {
       ui::set_runtime_asset_dir(dir);
     }
@@ -349,11 +348,6 @@ fn main() {
       .update(cx, move |_, window, cx| {
         window.activate_window();
         cx.activate(true);
-        if let Some(report) = startup_crash_report.clone() {
-          window.on_next_frame(move |window, cx| {
-            show_startup_crash_report_notification(window, report.clone(), cx);
-          });
-        }
       })
       .unwrap();
 
@@ -380,98 +374,7 @@ fn main() {
         }
       })
       .detach();
-
-    std::mem::drop(cx.register_url_scheme(app_profile.url_scheme()));
-    cx.spawn(async move |cx| {
-      let mut pending_open_github_urls: Vec<String> = Vec::new();
-      loop {
-        cx.background_executor()
-          .timer(Duration::from_millis(200))
-          .await;
-        while let Ok(urls) = open_url_rx.try_recv() {
-          let mut codes = Vec::new();
-          let mut should_handle_subscription_callback = false;
-          for url in &urls {
-            if let Some(code) = extract_auth_code(url) {
-              codes.push(code);
-            } else if is_subscription_callback(url) {
-              should_handle_subscription_callback = true;
-            } else if let Some(github_url) = extract_open_url(url) {
-              pending_open_github_urls.push(github_url);
-            }
-          }
-          if codes.is_empty()
-            && !should_handle_subscription_callback
-            && pending_open_github_urls.is_empty()
-          {
-            continue;
-          }
-          cx.update(|cx| {
-            for code in codes {
-              workspace::auth_flow::handle_auth_code(code, cx);
-            }
-            if should_handle_subscription_callback {
-              workspace::auth_flow::handle_subscription_callback(cx);
-            }
-          });
-        }
-        if !pending_open_github_urls.is_empty() {
-          let auth_known = cx.update(|cx| AuthStateStore::is_known(cx));
-          if auth_known {
-            let urls: Vec<String> = std::mem::take(&mut pending_open_github_urls);
-            cx.update(|cx| {
-              for github_url in urls {
-                handle_open_github_url(&github_url, cx);
-              }
-            });
-          }
-        }
-      }
-    })
-    .detach();
   });
-}
-
-fn resolved_sentry_release_from(
-  env_release: Option<&'static str>,
-  fallback: Option<Cow<'static, str>>,
-) -> Option<Cow<'static, str>> {
-  env_release.map(Cow::Borrowed).or(fallback)
-}
-
-fn resolved_sentry_release() -> Option<Cow<'static, str>> {
-  resolved_sentry_release_from(option_env!("SENTRY_RELEASE"), sentry::release_name!())
-}
-
-// ClientOptions is #[non_exhaustive] since sentry 0.49, so it only builds through setters.
-fn sentry_client_options(enabled: bool, traces_sample_rate: f32) -> sentry::ClientOptions {
-  let options = sentry::ClientOptions::default()
-    .maybe_release(resolved_sentry_release())
-    .send_default_pii(false)
-    .attach_stacktrace(true)
-    .max_breadcrumbs(300)
-    .traces_sample_rate(traces_sample_rate)
-    .in_app_include(["reviu", "workspace", "editor", "git", "ui"])
-    .before_send(redact_sensitive_event_data);
-
-  if enabled {
-    options.dsn(SENTRY_DSN)
-  } else {
-    options
-  }
-}
-
-fn sentry_enabled() -> bool {
-  let dev_flag = std::env::var(SENTRY_ENABLE_DEV_ENV).ok();
-  sentry_enabled_for(cfg!(debug_assertions), dev_flag.as_deref())
-}
-
-fn sentry_enabled_for(debug_build: bool, dev_flag: Option<&str>) -> bool {
-  if !debug_build {
-    return true;
-  }
-
-  dev_flag.is_some_and(is_truthy_env_value)
 }
 
 fn startup_deeplink_url(app_profile: AppProfile) -> Option<String> {
@@ -495,301 +398,24 @@ where
   }
 }
 
-fn is_truthy_env_value(value: &str) -> bool {
-  matches!(
-    value.trim().to_ascii_lowercase().as_str(),
-    "1" | "true" | "yes" | "on"
-  )
-}
-
-fn redact_sensitive_event_data(
-  mut event: sentry::protocol::Event<'static>,
-) -> Option<sentry::protocol::Event<'static>> {
-  // The contexts integration fills in the hostname, which often carries the user's name.
-  event.server_name = None;
-
-  if let Some(request) = event.request.as_mut() {
-    if request.query_string.is_some() {
-      request.query_string = Some(SENTRY_REDACTED.to_string());
-    }
-    if request.cookies.is_some() {
-      request.cookies = Some(SENTRY_REDACTED.to_string());
-    }
-    for (name, value) in &mut request.headers {
-      if is_sensitive_header(name) {
-        *value = SENTRY_REDACTED.to_string();
-      }
-    }
-    if request
-      .data
-      .as_ref()
-      .is_some_and(|value| contains_sensitive_fragment(value))
-    {
-      request.data = Some(SENTRY_REDACTED.to_string());
-    }
-  }
-
-  for (key, value) in &mut event.extra {
-    if is_sensitive_key(key) {
-      *value = sentry::protocol::Value::String(SENTRY_REDACTED.to_string());
-    }
-  }
-
-  Some(event)
-}
-
-fn is_sensitive_header(name: &str) -> bool {
-  let name = name.trim().to_ascii_lowercase();
-  name == "authorization"
-    || name == "cookie"
-    || name == "set-cookie"
-    || name == "x-api-key"
-    || name == "x-auth-token"
-}
-
-fn is_sensitive_key(key: &str) -> bool {
-  let key = key.trim().to_ascii_lowercase();
-  key.contains("token")
-    || key.contains("secret")
-    || key.contains("password")
-    || key.contains("authorization")
-}
-
-fn contains_sensitive_fragment(value: &str) -> bool {
-  let value = value.to_ascii_lowercase();
-  value.contains("token")
-    || value.contains("secret")
-    || value.contains("password")
-    || value.contains("authorization")
-}
-
-fn current_desktop_url_scheme() -> &'static str {
-  AppProfile::current().url_scheme()
-}
-
-fn extract_auth_code(url: &str) -> Option<String> {
-  extract_auth_code_for_scheme(url, current_desktop_url_scheme())
-}
-
-fn extract_auth_code_for_scheme(url: &str, scheme: &str) -> Option<String> {
-  let url = url.strip_prefix(scheme)?;
-  let url = url.strip_prefix("://")?;
-  let (path, query) = url.split_once('?')?;
-  if path != "auth/callback" {
-    return None;
-  }
-  for pair in query.split('&') {
-    let (key, value) = pair.split_once('=')?;
-    if key == "code" && !value.is_empty() {
-      return Some(value.to_string());
-    }
-  }
-  None
-}
-
-fn is_subscription_callback(url: &str) -> bool {
-  is_subscription_callback_for_scheme(url, current_desktop_url_scheme())
-}
-
-fn is_subscription_callback_for_scheme(url: &str, scheme: &str) -> bool {
-  let Some(url) = url.strip_prefix(scheme) else {
-    return false;
-  };
-  let Some(url) = url.strip_prefix("://") else {
-    return false;
-  };
-
-  let path = url.split_once('?').map(|(path, _)| path).unwrap_or(url);
-  path == "subscription/callback"
-}
-
-fn extract_open_url(url: &str) -> Option<String> {
-  extract_open_url_for_scheme(url, current_desktop_url_scheme())
-    .or_else(|| extract_open_url_for_scheme(url, workspace::URL_SCHEME_PROD))
-}
-
-fn extract_open_url_for_scheme(url: &str, scheme: &str) -> Option<String> {
-  let url = url.strip_prefix(scheme)?;
-  let url = url.strip_prefix("://")?;
-  let (path, query) = url.split_once('?')?;
-  if path != "open" {
-    return None;
-  }
-  for pair in query.split('&') {
-    if let Some(value) = pair.strip_prefix("url=")
-      && !value.is_empty()
-    {
-      let decoded = percent_encoding::percent_decode_str(value)
-        .decode_utf8()
-        .ok()?;
-      return Some(decoded.into_owned());
-    }
-  }
-  None
-}
-
-struct PrDeepLink {
-  owner: String,
-  repo: String,
-  number: u64,
-  review_comment_id: Option<u64>,
-}
-
-/// Only a pull request can be reviewed here; other GitHub links would bounce
-/// straight back to the browser they came from.
-fn pr_deep_link(url: &str) -> Option<PrDeepLink> {
-  match parse_github_url_action(url)? {
-    ui::CommandPaletteAction::OpenGithubPrDetails {
-      owner,
-      repo,
-      number,
-      review_comment_id,
-      ..
-    } => Some(PrDeepLink {
-      owner,
-      repo,
-      number,
-      review_comment_id,
-    }),
-    _ => None,
-  }
-}
-
-fn handle_open_github_url(url: &str, cx: &mut App) {
-  let Some(target) = pr_deep_link(url) else {
-    return;
-  };
-  cx.activate(true);
-  // The link asked to review it here, so bouncing back to the browser would be
-  // no answer at all: the shell either shows it or says why it cannot.
-  open_pull_request_target(
-    target.owner,
-    target.repo,
-    target.number,
-    false,
-    target.review_comment_id,
-    PullRequestFallback::OfferCheckout,
-    cx,
-  );
-}
-
 #[cfg(test)]
 mod tests {
-  use super::{
-    contains_sensitive_fragment, extract_auth_code_for_scheme, extract_open_url_for_scheme,
-    is_sensitive_header, is_sensitive_key, is_subscription_callback_for_scheme,
-    is_truthy_env_value, pr_deep_link, redact_sensitive_event_data, resolved_sentry_release_from,
-    sentry_client_options, sentry_enabled_for, startup_deeplink_url_from_args,
-  };
-  use sentry::protocol::{Event, Request, Value};
-  use std::borrow::Cow;
-
-  #[test]
-  fn pr_deep_link_accepts_pull_request_urls() {
-    let target = pr_deep_link("https://github.com/acme/widget/pull/42").expect("pr deep link");
-    assert_eq!(target.owner, "acme");
-    assert_eq!(target.repo, "widget");
-    assert_eq!(target.number, 42);
-
-    // A link to one of its comments still names the pull request.
-    let with_comment =
-      pr_deep_link("https://github.com/acme/widget/pull/42#discussion_r123").expect("pr deep link");
-    assert_eq!(with_comment.number, 42);
-  }
-
-  #[test]
-  fn pr_deep_link_ignores_links_without_a_reviu_page() {
-    for url in [
-      "https://github.com/acme/widget",
-      "https://github.com/acme/widget/issues/42",
-      "https://github.com/acme/widget/issues",
-      "https://github.com/acme/widget/pulls",
-      "https://github.com/acme/widget/commit/abc123",
-      "https://github.com/acme",
-      "https://example.com/acme/widget/pull/42",
-    ] {
-      assert!(
-        pr_deep_link(url).is_none(),
-        "{url} should not open a Reviu page"
-      );
-    }
-  }
-
-  #[test]
-  fn is_truthy_env_value_accepts_supported_values() {
-    assert!(is_truthy_env_value("1"));
-    assert!(is_truthy_env_value("true"));
-    assert!(is_truthy_env_value("TRUE"));
-    assert!(is_truthy_env_value("yes"));
-    assert!(is_truthy_env_value("on"));
-    assert!(is_truthy_env_value("  true  "));
-  }
-
-  #[test]
-  fn is_truthy_env_value_rejects_other_values() {
-    assert!(!is_truthy_env_value(""));
-    assert!(!is_truthy_env_value("0"));
-    assert!(!is_truthy_env_value("false"));
-    assert!(!is_truthy_env_value("no"));
-    assert!(!is_truthy_env_value("off"));
-  }
-
-  #[test]
-  fn sentry_enabled_for_enables_release_without_flag() {
-    assert!(sentry_enabled_for(false, None));
-    assert!(sentry_enabled_for(false, Some("0")));
-  }
-
-  #[test]
-  fn sentry_enabled_for_requires_flag_in_debug() {
-    assert!(!sentry_enabled_for(true, None));
-    assert!(!sentry_enabled_for(true, Some("0")));
-    assert!(sentry_enabled_for(true, Some("1")));
-  }
-
-  #[test]
-  fn sentry_client_options_carry_every_configured_field() {
-    let options = sentry_client_options(true, 0.1);
-    assert!(options.dsn.is_some());
-    assert_eq!(options.max_breadcrumbs, 300);
-    assert!(options.attach_stacktrace);
-    assert!(!options.send_default_pii);
-    assert_eq!(
-      options.in_app_include,
-      ["reviu", "workspace", "editor", "git", "ui"]
-    );
-  }
-
-  #[test]
-  fn sentry_client_options_omit_the_dsn_when_disabled() {
-    assert!(sentry_client_options(false, 1.0).dsn.is_none());
-  }
-
-  #[test]
-  fn resolved_sentry_release_prefers_env_value() {
-    let fallback = Some(Cow::Borrowed("reviu@0.0.1"));
-    let release = resolved_sentry_release_from(Some("reviu@1.2.3"), fallback);
-    assert_eq!(release.as_deref(), Some("reviu@1.2.3"));
-  }
-
-  #[test]
-  fn resolved_sentry_release_falls_back_when_env_missing() {
-    let fallback = Some(Cow::Borrowed("reviu@0.0.1"));
-    let release = resolved_sentry_release_from(None, fallback);
-    assert_eq!(release.as_deref(), Some("reviu@0.0.1"));
-  }
+  use super::startup_deeplink_url_from_args;
 
   #[test]
   fn startup_deeplink_url_reads_current_profile_url_arg() {
     let url = startup_deeplink_url_from_args(
       [
         "reviu".to_string(),
-        "reviu://auth/callback?code=abc123".to_string(),
+        "reviu://open?url=https%3A%2F%2Fexample.com".to_string(),
       ],
       "reviu",
     );
 
-    assert_eq!(url.as_deref(), Some("reviu://auth/callback?code=abc123"));
+    assert_eq!(
+      url.as_deref(),
+      Some("reviu://open?url=https%3A%2F%2Fexample.com")
+    );
   }
 
   #[test]
@@ -799,192 +425,8 @@ mod tests {
       None
     );
     assert_eq!(
-      startup_deeplink_url_from_args(["reviu", "reviu-dev://auth/callback?code=abc123"], "reviu"),
+      startup_deeplink_url_from_args(["reviu", "reviu-dev://open"], "reviu"),
       None
-    );
-  }
-
-  #[test]
-  fn redact_sensitive_event_data_drops_the_machine_name() {
-    let event = Event {
-      server_name: Some("australis-someone".into()),
-      ..Default::default()
-    };
-
-    let event = redact_sensitive_event_data(event).expect("event kept");
-
-    assert_eq!(event.server_name, None);
-  }
-
-  #[test]
-  fn redact_sensitive_event_data_masks_request_fields() {
-    let mut request = Request {
-      query_string: Some("token=abc123".into()),
-      cookies: Some("session=foo".into()),
-      data: Some(r#"{"password":"abc"}"#.into()),
-      ..Default::default()
-    };
-    request
-      .headers
-      .insert("Authorization".into(), "Bearer secret".into());
-    request.headers.insert("X-Trace-Id".into(), "safe".into());
-
-    let mut event = Event {
-      request: Some(request),
-      ..Default::default()
-    };
-    event
-      .extra
-      .insert("api_token".into(), Value::String("token".into()));
-    event
-      .extra
-      .insert("safe_key".into(), Value::String("value".into()));
-
-    let redacted = redact_sensitive_event_data(event).expect("event");
-    let request = redacted.request.expect("request");
-    assert_eq!(request.query_string.as_deref(), Some("[REDACTED]"));
-    assert_eq!(request.cookies.as_deref(), Some("[REDACTED]"));
-    assert_eq!(request.data.as_deref(), Some("[REDACTED]"));
-    assert_eq!(
-      request.headers.get("Authorization").map(String::as_str),
-      Some("[REDACTED]")
-    );
-    assert_eq!(
-      request.headers.get("X-Trace-Id").map(String::as_str),
-      Some("safe")
-    );
-    assert_eq!(
-      redacted.extra.get("api_token"),
-      Some(&Value::String("[REDACTED]".into()))
-    );
-    assert_eq!(
-      redacted.extra.get("safe_key"),
-      Some(&Value::String("value".into()))
-    );
-  }
-
-  #[test]
-  fn sensitive_key_helpers_detect_expected_patterns() {
-    assert!(is_sensitive_header("authorization"));
-    assert!(is_sensitive_header("X-AUTH-TOKEN"));
-    assert!(!is_sensitive_header("x-trace-id"));
-
-    assert!(is_sensitive_key("api_token"));
-    assert!(is_sensitive_key("db_password"));
-    assert!(!is_sensitive_key("git_branch"));
-
-    assert!(contains_sensitive_fragment("Authorization: Bearer token"));
-    assert!(!contains_sensitive_fragment("plain text"));
-  }
-
-  #[test]
-  fn extract_auth_code_reads_code_from_auth_callback_url() {
-    let code =
-      extract_auth_code_for_scheme("reviu://auth/callback?code=abc123&state=test", "reviu");
-    assert_eq!(code.as_deref(), Some("abc123"));
-  }
-
-  #[test]
-  fn extract_auth_code_rejects_non_auth_callback_url() {
-    let code = extract_auth_code_for_scheme("reviu://subscription/callback", "reviu");
-    assert_eq!(code, None);
-  }
-
-  #[test]
-  fn is_subscription_callback_accepts_plain_and_query_urls() {
-    assert!(is_subscription_callback_for_scheme(
-      "reviu://subscription/callback",
-      "reviu"
-    ));
-    assert!(is_subscription_callback_for_scheme(
-      "reviu://subscription/callback?checkout_id=123",
-      "reviu"
-    ));
-  }
-
-  #[test]
-  fn is_subscription_callback_rejects_other_urls() {
-    assert!(!is_subscription_callback_for_scheme(
-      "reviu://auth/callback?code=abc123",
-      "reviu"
-    ));
-    assert!(!is_subscription_callback_for_scheme(
-      "https://example.com",
-      "reviu"
-    ));
-  }
-
-  #[test]
-  fn extract_auth_code_supports_dev_scheme() {
-    let code = extract_auth_code_for_scheme("reviu-dev://auth/callback?code=dev123", "reviu-dev");
-    assert_eq!(code.as_deref(), Some("dev123"));
-  }
-
-  #[test]
-  fn is_subscription_callback_supports_dev_scheme() {
-    assert!(is_subscription_callback_for_scheme(
-      "reviu-dev://subscription/callback",
-      "reviu-dev"
-    ));
-  }
-
-  #[test]
-  fn extract_open_url_decodes_github_pr_url() {
-    let url = extract_open_url_for_scheme(
-      "reviu://open?url=https%3A%2F%2Fgithub.com%2Fowner%2Frepo%2Fpull%2F42",
-      "reviu",
-    );
-    assert_eq!(
-      url.as_deref(),
-      Some("https://github.com/owner/repo/pull/42")
-    );
-  }
-
-  #[test]
-  fn extract_open_url_decodes_github_repo_url() {
-    let url = extract_open_url_for_scheme(
-      "reviu://open?url=https%3A%2F%2Fgithub.com%2Fowner%2Frepo",
-      "reviu",
-    );
-    assert_eq!(url.as_deref(), Some("https://github.com/owner/repo"));
-  }
-
-  #[test]
-  fn extract_open_url_supports_dev_scheme() {
-    let url = extract_open_url_for_scheme(
-      "reviu-dev://open?url=https%3A%2F%2Fgithub.com%2Fa%2Fb",
-      "reviu-dev",
-    );
-    assert_eq!(url.as_deref(), Some("https://github.com/a/b"));
-  }
-
-  #[test]
-  fn extract_open_url_rejects_non_open_path() {
-    let url = extract_open_url_for_scheme("reviu://auth/callback?url=https%3A%2F%2Fx", "reviu");
-    assert_eq!(url, None);
-  }
-
-  #[test]
-  fn extract_open_url_rejects_empty_url_param() {
-    let url = extract_open_url_for_scheme("reviu://open?url=", "reviu");
-    assert_eq!(url, None);
-  }
-
-  #[test]
-  fn extract_open_url_rejects_missing_query() {
-    let url = extract_open_url_for_scheme("reviu://open", "reviu");
-    assert_eq!(url, None);
-  }
-
-  #[test]
-  fn extract_open_url_handles_fragment_in_github_url() {
-    let url = extract_open_url_for_scheme(
-      "reviu://open?url=https%3A%2F%2Fgithub.com%2Fowner%2Frepo%2Fpull%2F1%23discussion_r123",
-      "reviu",
-    );
-    assert_eq!(
-      url.as_deref(),
-      Some("https://github.com/owner/repo/pull/1#discussion_r123")
     );
   }
 }

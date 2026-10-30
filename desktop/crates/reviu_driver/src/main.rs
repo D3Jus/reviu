@@ -164,10 +164,6 @@ enum Command {
   OpenCodeFile {
     path: String,
   },
-  /// Open a Pull Request file in the center diff editor.
-  OpenPullRequestFile {
-    path: Option<String>,
-  },
   /// Simulate a mouse wheel scroll at an absolute point or the window center.
   Scroll {
     delta_x: Option<f32>,
@@ -229,24 +225,8 @@ enum Command {
     active_path: Option<String>,
     dock_width: Option<f32>,
   },
-  /// Direct driver hook: open the Pull Request dock tab.
-  ShowPullRequest,
-  /// Direct driver hook: expand the Pull Request details/checks block.
-  ExpandPullRequestDetails,
   /// Direct driver hook: open the Review dock tab.
   ShowReview,
-  /// Direct driver hook: create a pending pull request review comment on the open PR file.
-  CreatePullRequestReviewComment {
-    path: String,
-    line: usize,
-    body: String,
-  },
-  /// Direct driver hook: submit the pending pull request review as a comment review.
-  SubmitPullRequestReview {
-    body: String,
-  },
-  /// Direct driver hook: open the discard pending pull request review confirmation.
-  DiscardPullRequestReview,
   /// Direct driver hook for perf runs: close the right dock.
   HideDock,
   /// Direct driver hook for perf runs: fill and submit the agent composer.
@@ -269,24 +249,6 @@ enum Command {
   NotificationStats,
   /// Expose notifications recorded through driver-supported flows.
   NotificationLog,
-  /// Refresh GitHub inbox notifications through the Reviu API.
-  RefreshGithubNotifications,
-  /// Expose GitHub inbox notification state.
-  GithubNotifications,
-  /// Open a GitHub inbox notification by thread id.
-  OpenGithubNotification {
-    id: String,
-  },
-  /// Mark a GitHub inbox notification done by thread id.
-  MarkGithubNotificationDone {
-    id: String,
-  },
-  /// Expose Reviu auth state for driver diagnostics.
-  AuthState,
-  /// Set an in-memory Reviu API bearer token, then refresh auth state.
-  SetAuthToken {
-    token: String,
-  },
   /// Run a Git action through the same path as the command palette.
   RunGitAction {
     action: workspace::DriverGitAction,
@@ -522,18 +484,6 @@ fn handle_test_command(
         Err(error) => respond(err(error)),
       }
     }
-    Command::OpenPullRequestFile { path } => {
-      let result = cx.update(|window, cx| {
-        view.update(cx, |view, cx| {
-          view.open_pull_request_file_for_driver(path.map(PathBuf::from), window, cx)
-        })
-      });
-      cx.run_until_parked();
-      match result {
-        Ok(()) => respond(ok(serde_json::json!({}))),
-        Err(error) => respond(err(error)),
-      }
-    }
     Command::Scroll {
       delta_x,
       delta_y,
@@ -710,58 +660,9 @@ fn handle_test_command(
         Err(error) => respond(err(error)),
       }
     }
-    Command::ShowPullRequest => {
-      cx.update(|window, cx| {
-        view.update(cx, |view, cx| view.show_pull_request_for_driver(window, cx));
-      });
-      cx.run_until_parked();
-      respond(ok(serde_json::json!({})));
-    }
-    Command::ExpandPullRequestDetails => {
-      cx.update(|_, cx| {
-        view.update(cx, |view, cx| {
-          view.set_pull_request_details_expanded_for_driver(true, cx)
-        });
-      });
-      cx.run_until_parked();
-      respond(ok(serde_json::json!({})));
-    }
     Command::ShowReview => {
       cx.update(|window, cx| {
         view.update(cx, |view, cx| view.show_review_for_driver(window, cx));
-      });
-      cx.run_until_parked();
-      respond(ok(serde_json::json!({})));
-    }
-    Command::CreatePullRequestReviewComment { path, line, body } => {
-      let result = cx.update(|_, cx| {
-        view.update(cx, |view, cx| {
-          view.create_pull_request_review_comment_for_driver(PathBuf::from(path), line, body, cx)
-        })
-      });
-      cx.run_until_parked();
-      match result {
-        Ok(()) => respond(ok(serde_json::json!({}))),
-        Err(error) => respond(err(error)),
-      }
-    }
-    Command::SubmitPullRequestReview { body } => {
-      let result = cx.update(|_, cx| {
-        view.update(cx, |view, cx| {
-          view.submit_pull_request_review_for_driver(body, cx)
-        })
-      });
-      cx.run_until_parked();
-      match result {
-        Ok(()) => respond(ok(serde_json::json!({}))),
-        Err(error) => respond(err(error)),
-      }
-    }
-    Command::DiscardPullRequestReview => {
-      cx.update(|window, cx| {
-        view.update(cx, |view, cx| {
-          view.discard_pull_request_review_for_driver(window, cx)
-        });
       });
       cx.run_until_parked();
       respond(ok(serde_json::json!({})));
@@ -804,57 +705,6 @@ fn handle_test_command(
     Command::NotificationLog => {
       let log = view.read_with(cx, |view, cx| view.notification_log_for_driver(cx));
       respond(ok(log));
-    }
-    Command::RefreshGithubNotifications => {
-      let result = cx.update(|_, cx| {
-        view.update(cx, |view, cx| {
-          view.refresh_github_notifications_for_driver(cx)
-        })
-      });
-      cx.run_until_parked();
-      match result {
-        Ok(()) => respond(ok(serde_json::json!({}))),
-        Err(error) => respond(err(error)),
-      }
-    }
-    Command::GithubNotifications => {
-      let state = view.read_with(cx, |view, cx| view.github_notifications_for_driver(cx));
-      respond(ok(state));
-    }
-    Command::OpenGithubNotification { id } => {
-      let result = cx.update(|_, cx| {
-        view.update(cx, |view, cx| {
-          view.open_github_notification_for_driver(id, cx)
-        })
-      });
-      cx.run_until_parked();
-      match result {
-        Ok(()) => respond(ok(serde_json::json!({}))),
-        Err(error) => respond(err(error)),
-      }
-    }
-    Command::MarkGithubNotificationDone { id } => {
-      let result = cx.update(|_, cx| {
-        view.update(cx, |view, cx| {
-          view.mark_github_notification_done_for_driver(id, cx)
-        })
-      });
-      cx.run_until_parked();
-      match result {
-        Ok(()) => respond(ok(serde_json::json!({}))),
-        Err(error) => respond(err(error)),
-      }
-    }
-    Command::AuthState => {
-      let state = view.read_with(cx, |view, cx| view.auth_state_for_driver(cx));
-      respond(ok(state));
-    }
-    Command::SetAuthToken { token } => {
-      cx.update(|_, cx| {
-        view.update(cx, |view, cx| view.set_auth_token_for_driver(token, cx));
-      });
-      cx.run_until_parked();
-      respond(ok(serde_json::json!({})));
     }
     Command::RunGitAction { action } => {
       let result = cx.update(|window, cx| {
@@ -1076,12 +926,6 @@ fn handle_visual_command(
       Ok(()) => respond(ok(serde_json::json!({}))),
       Err(error) => respond(err(error)),
     },
-    Command::OpenPullRequestFile { path } => {
-      match open_pull_request_file_directly(cx, window, view, path) {
-        Ok(()) => respond(ok(serde_json::json!({}))),
-        Err(error) => respond(err(error)),
-      }
-    }
     Command::Scroll {
       delta_x,
       delta_y,
@@ -1177,38 +1021,10 @@ fn handle_visual_command(
       Ok(()) => respond(ok(serde_json::json!({}))),
       Err(error) => respond(err(error)),
     },
-    Command::ShowPullRequest => match show_pull_request_directly(cx, window, view) {
-      Ok(()) => respond(ok(serde_json::json!({}))),
-      Err(error) => respond(err(error)),
-    },
-    Command::ExpandPullRequestDetails => {
-      match expand_pull_request_details_directly(cx, window, view) {
-        Ok(()) => respond(ok(serde_json::json!({}))),
-        Err(error) => respond(err(error)),
-      }
-    }
     Command::ShowReview => match show_review_directly(cx, window, view) {
       Ok(()) => respond(ok(serde_json::json!({}))),
       Err(error) => respond(err(error)),
     },
-    Command::CreatePullRequestReviewComment { path, line, body } => {
-      match create_pull_request_review_comment_directly(cx, window, view, path, line, body) {
-        Ok(()) => respond(ok(serde_json::json!({}))),
-        Err(error) => respond(err(error)),
-      }
-    }
-    Command::SubmitPullRequestReview { body } => {
-      match submit_pull_request_review_directly(cx, window, view, body) {
-        Ok(()) => respond(ok(serde_json::json!({}))),
-        Err(error) => respond(err(error)),
-      }
-    }
-    Command::DiscardPullRequestReview => {
-      match discard_pull_request_review_directly(cx, window, view) {
-        Ok(()) => respond(ok(serde_json::json!({}))),
-        Err(error) => respond(err(error)),
-      }
-    }
     Command::HideDock => match hide_dock_directly(cx, window, view) {
       Ok(()) => respond(ok(serde_json::json!({}))),
       Err(error) => respond(err(error)),
@@ -1247,36 +1063,6 @@ fn handle_visual_command(
     },
     Command::NotificationLog => match notification_log_directly(cx, view) {
       Ok(log) => respond(ok(log)),
-      Err(error) => respond(err(error)),
-    },
-    Command::RefreshGithubNotifications => {
-      match refresh_github_notifications_directly(cx, window, view) {
-        Ok(()) => respond(ok(serde_json::json!({}))),
-        Err(error) => respond(err(error)),
-      }
-    }
-    Command::GithubNotifications => match github_notifications_directly(cx, view) {
-      Ok(state) => respond(ok(state)),
-      Err(error) => respond(err(error)),
-    },
-    Command::OpenGithubNotification { id } => {
-      match open_github_notification_directly(cx, window, view, id) {
-        Ok(()) => respond(ok(serde_json::json!({}))),
-        Err(error) => respond(err(error)),
-      }
-    }
-    Command::MarkGithubNotificationDone { id } => {
-      match mark_github_notification_done_directly(cx, window, view, id) {
-        Ok(()) => respond(ok(serde_json::json!({}))),
-        Err(error) => respond(err(error)),
-      }
-    }
-    Command::AuthState => match auth_state_directly(cx, view) {
-      Ok(state) => respond(ok(state)),
-      Err(error) => respond(err(error)),
-    },
-    Command::SetAuthToken { token } => match set_auth_token_directly(cx, window, view, token) {
-      Ok(()) => respond(ok(serde_json::json!({}))),
       Err(error) => respond(err(error)),
     },
     Command::RunGitAction { action } => match run_git_action_directly(cx, window, view, action) {
@@ -2120,14 +1906,6 @@ mod tests {
       Command::OpenFile { path } => assert_eq!(path, "src/main.rs"),
       _ => panic!("expected open file command"),
     }
-    match serde_json::from_str::<Command>(
-      r#"{"cmd":"open_pull_request_file","path":"src/main.rs"}"#,
-    )
-    .expect("open pull request file")
-    {
-      Command::OpenPullRequestFile { path } => assert_eq!(path.as_deref(), Some("src/main.rs")),
-      _ => panic!("expected open pull request file command"),
-    }
     match serde_json::from_str::<Command>(r#"{"cmd":"scroll","delta_y":-640.0,"steps":3}"#)
       .expect("scroll")
     {
@@ -2153,15 +1931,6 @@ mod tests {
       Command::ResizeSidebar { width } => assert_eq!(width, 280.0),
       _ => panic!("expected resize sidebar command"),
     }
-    assert!(matches!(
-      serde_json::from_str::<Command>(r#"{"cmd":"show_pull_request"}"#).expect("show pull request"),
-      Command::ShowPullRequest
-    ));
-    assert!(matches!(
-      serde_json::from_str::<Command>(r#"{"cmd":"expand_pull_request_details"}"#)
-        .expect("expand pull request details"),
-      Command::ExpandPullRequestDetails
-    ));
     assert!(matches!(
       serde_json::from_str::<Command>(r#"{"cmd":"show_review"}"#).expect("show review"),
       Command::ShowReview
@@ -2190,31 +1959,6 @@ mod tests {
       Command::SeedAgentMessage { text } => assert_eq!(text, "Review tax rounding"),
       _ => panic!("expected seed agent message command"),
     }
-    match serde_json::from_str::<Command>(
-      r#"{"cmd":"create_pull_request_review_comment","path":"src/main.rs","line":0,"body":"note"}"#,
-    )
-    .expect("create pull request review comment")
-    {
-      Command::CreatePullRequestReviewComment { path, line, body } => {
-        assert_eq!(path, "src/main.rs");
-        assert_eq!(line, 0);
-        assert_eq!(body, "note");
-      }
-      _ => panic!("expected create pull request review comment command"),
-    }
-    match serde_json::from_str::<Command>(
-      r#"{"cmd":"submit_pull_request_review","body":"looks good"}"#,
-    )
-    .expect("submit pull request review")
-    {
-      Command::SubmitPullRequestReview { body } => assert_eq!(body, "looks good"),
-      _ => panic!("expected submit pull request review command"),
-    }
-    assert!(matches!(
-      serde_json::from_str::<Command>(r#"{"cmd":"discard_pull_request_review"}"#)
-        .expect("discard pull request review"),
-      Command::DiscardPullRequestReview
-    ));
     assert!(matches!(
       serde_json::from_str::<Command>(r#"{"cmd":"hide_dock"}"#).expect("hide dock"),
       Command::HideDock
@@ -2250,38 +1994,6 @@ mod tests {
       serde_json::from_str::<Command>(r#"{"cmd":"notification_log"}"#).expect("notification log"),
       Command::NotificationLog
     ));
-    assert!(matches!(
-      serde_json::from_str::<Command>(r#"{"cmd":"refresh_github_notifications"}"#)
-        .expect("refresh github notifications"),
-      Command::RefreshGithubNotifications
-    ));
-    assert!(matches!(
-      serde_json::from_str::<Command>(r#"{"cmd":"github_notifications"}"#)
-        .expect("github notifications"),
-      Command::GithubNotifications
-    ));
-    match serde_json::from_str::<Command>(r#"{"cmd":"open_github_notification","id":"1"}"#)
-      .expect("open github notification")
-    {
-      Command::OpenGithubNotification { id } => assert_eq!(id, "1"),
-      _ => panic!("expected open github notification command"),
-    }
-    match serde_json::from_str::<Command>(r#"{"cmd":"mark_github_notification_done","id":"1"}"#)
-      .expect("mark github notification done")
-    {
-      Command::MarkGithubNotificationDone { id } => assert_eq!(id, "1"),
-      _ => panic!("expected mark github notification done command"),
-    }
-    assert!(matches!(
-      serde_json::from_str::<Command>(r#"{"cmd":"auth_state"}"#).expect("auth state"),
-      Command::AuthState
-    ));
-    match serde_json::from_str::<Command>(r#"{"cmd":"set_auth_token","token":"tok"}"#)
-      .expect("set auth token")
-    {
-      Command::SetAuthToken { token } => assert_eq!(token, "tok"),
-      _ => panic!("expected set auth token"),
-    }
     match serde_json::from_str::<Command>(
       r#"{"cmd":"run_git_action","action":{"action":"stash","include_untracked":false,"message":"wip"}}"#,
     )

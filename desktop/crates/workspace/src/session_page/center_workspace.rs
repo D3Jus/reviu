@@ -639,7 +639,6 @@ impl SessionPage {
         });
     }
     self.sync_editor_unmerged_state(cx);
-    self.sync_git_telemetry(cx);
     self.focus_editor_on_next_frame(window, cx);
     self.persist_current_center_workspace(cx);
     cx.notify();

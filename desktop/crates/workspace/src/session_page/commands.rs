@@ -529,13 +529,7 @@ impl SessionPage {
       panel.set_changes_action_in_flight(changes_action_in_flight, cx);
     });
     cx.notify();
-    let checked_out_for_link = matches!(command, RepoCommand::SwitchToBranchName { .. });
     let finishes_amend = matches!(command, RepoCommand::Amend { .. });
-    let telemetry_key = command.telemetry_key();
-    let analytics_event = command.analytics_event();
-    self
-      .git_telemetry(cx)
-      .breadcrumb(command.label(), Map::new());
     let window_handle = self.window_handle;
     let task = cx.spawn(async move |this, cx| {
       let result = cx
@@ -547,9 +541,6 @@ impl SessionPage {
           this.dock_panel.update(cx, |panel, cx| {
             panel.set_changes_action_in_flight(None, cx);
           });
-          this
-            .git_telemetry(cx)
-            .report_outcome(telemetry_key, git_telemetry::outcome_report(&result));
           match result {
             Ok(outcome) => {
               match outcome {
@@ -591,9 +582,6 @@ impl SessionPage {
                   this.open_diff(path, None, OpenIntent::Open, window, cx);
                 }
               }
-              if let Some(event) = analytics_event {
-                crate::analytics::track(cx, event);
-              }
               this.dock_panel.update(cx, |panel, cx| {
                 if finishes_amend {
                   panel.finish_amend(window, cx);
@@ -601,13 +589,8 @@ impl SessionPage {
                 panel.refresh(cx);
               });
               this.refresh_branch(cx);
-              this.open_pending_pull_request_dialog(window, cx);
             }
             Err(error) => {
-              this.pending_pull_request = None;
-              if checked_out_for_link {
-                crate::pull_request_surface::PullRequestSurfaceHandle::forget(cx);
-              }
               let message = repo_command_error_message(&error);
               #[cfg(any(test, feature = "test-support"))]
               this.record_notification_for_driver(
@@ -624,42 +607,6 @@ impl SessionPage {
     self._repo_command_task = Some(task);
 
     Ok(())
-  }
-
-  /// GitHub needs the branch on the remote before it can open a pull request,
-  /// so the push comes first and the form only follows if it worked.
-  pub(super) fn publish_branch_and_create_pull_request(
-    &mut self,
-    context: GithubBranchContext,
-    window: &mut Window,
-    cx: &mut Context<Self>,
-  ) {
-    self.pending_pull_request = Some(context);
-    if let Err(error) = self.run_repo_command(RepoCommand::Push, window, cx) {
-      self.pending_pull_request = None;
-      window.push_notification(Notification::warning(error), cx);
-    }
-  }
-
-  pub(super) fn open_pending_pull_request_dialog(
-    &mut self,
-    window: &mut Window,
-    cx: &mut Context<Self>,
-  ) {
-    let Some(context) = self.pending_pull_request.take() else {
-      return;
-    };
-    let panel = self.dock_panel.clone();
-    open_create_pull_request_dialog(
-      WorkspaceApi::global(cx).api.clone(),
-      self.window_handle,
-      Rc::new(move |_context, _pull_request, cx| {
-        panel.update(cx, |panel, cx| panel.refresh(cx));
-      }),
-      context,
-      window,
-      cx,
-    );
   }
 }
 
@@ -1711,157 +1658,6 @@ mod tests {
   }
 
   #[gpui::test(iterations = 10)]
-  async fn publishing_a_branch_opens_the_pull_request_form_after_the_push(cx: &mut TestAppContext) {
-    let repo = TempRepo::init("session-page-publish-and-create");
-    commit_text_file(&repo.path, Path::new("README.md"), "v1\n", "initial");
-    let remote = publish_to_new_remote(&repo.path, "session-page-publish-and-create");
-    git::create_branch(&repo.path, "feature").expect("create branch");
-    git::switch_branch(
-      &repo.path,
-      &git::BranchRef {
-        name: "feature".to_string(),
-        kind: git::BranchKind::Local,
-      },
-    )
-    .expect("switch branch");
-    commit_text_file(&repo.path, Path::new("README.md"), "v2\n", "feature work");
-
-    let (page, cx) = add_session_page_window(repo.path.clone(), cx);
-    cx.run_until_parked();
-    page.update(cx, |page, cx| page.refresh_branch(cx));
-    await_branch_refresh(&page, cx).await;
-    page.read_with(cx, |page, cx| {
-      assert!(
-        !page
-          .repo_snapshot
-          .read(cx)
-          .branch_status()
-          .expect("branch status")
-          .has_upstream,
-        "the branch starts unpublished"
-      );
-    });
-
-    let context = GithubBranchContext {
-      owner: "acme".to_string(),
-      repo: "widget".to_string(),
-      branch: "feature".to_string(),
-    };
-    page.update_in(cx, |page, window, cx| {
-      page.publish_branch_and_create_pull_request(context, window, cx);
-    });
-    let command = page.update(cx, |page, _| {
-      page._repo_command_task.take().expect("push task")
-    });
-    command.await;
-    cx.run_until_parked();
-
-    let remote_repo = git2::Repository::open(&remote).expect("open remote");
-    assert!(
-      remote_repo.refname_to_id("refs/heads/feature").is_ok(),
-      "the branch reached the remote"
-    );
-    assert!(
-      cx.update(|window, cx| window.has_active_dialog(cx)),
-      "the pull request form follows the push"
-    );
-    page.read_with(cx, |page, _| {
-      assert!(page.pending_pull_request.is_none());
-    });
-  }
-
-  #[gpui::test(iterations = 10)]
-  async fn a_refused_publish_leaves_no_form_waiting_for_the_next_push(cx: &mut TestAppContext) {
-    let repo = TempRepo::init("session-page-publish-refused");
-    commit_text_file(&repo.path, Path::new("README.md"), "v1\n", "initial");
-    let remote = publish_to_new_remote(&repo.path, "session-page-publish-refused");
-    commit_text_file(&repo.path, Path::new("README.md"), "v2\n", "second");
-
-    let (page, cx) = add_session_page_window(repo.path.clone(), cx);
-    cx.run_until_parked();
-
-    // Another git command is already running: the publish is refused up front.
-    page.update(cx, |page, _| {
-      page.repo_command_in_flight = Some(RepoCommandInFlight::Other)
-    });
-    let context = GithubBranchContext {
-      owner: "acme".to_string(),
-      repo: "widget".to_string(),
-      branch: "feature".to_string(),
-    };
-    page.update_in(cx, |page, window, cx| {
-      page.publish_branch_and_create_pull_request(context, window, cx);
-    });
-    cx.run_until_parked();
-
-    page.read_with(cx, |page, _| {
-      assert!(page._repo_command_task.is_none(), "nothing was launched");
-      assert!(page.pending_pull_request.is_none());
-    });
-    assert!(!cx.update(|window, cx| window.has_active_dialog(cx)));
-
-    // An unrelated push must not inherit the form that was never opened.
-    page.update(cx, |page, _| page.repo_command_in_flight = None);
-    page.update_in(cx, |page, window, cx| {
-      page
-        .run_repo_command(RepoCommand::Push, window, cx)
-        .expect("push");
-    });
-    let command = page.update(cx, |page, _| {
-      page._repo_command_task.take().expect("push task")
-    });
-    command.await;
-    cx.run_until_parked();
-
-    let remote_repo = git2::Repository::open(&remote).expect("open remote");
-    let head = remote_repo
-      .head()
-      .and_then(|head| head.peel_to_commit())
-      .expect("remote head");
-    assert_eq!(
-      head.summary().expect("read summary"),
-      Some("second"),
-      "the push went through"
-    );
-    assert!(
-      !cx.update(|window, cx| window.has_active_dialog(cx)),
-      "a plain push opens no pull request form"
-    );
-  }
-
-  #[gpui::test(iterations = 10)]
-  async fn a_failed_publish_opens_no_pull_request_form(cx: &mut TestAppContext) {
-    let repo = TempRepo::init("session-page-publish-failure");
-    commit_text_file(&repo.path, Path::new("README.md"), "v1\n", "initial");
-
-    let (page, cx) = add_session_page_window(repo.path.clone(), cx);
-    cx.run_until_parked();
-
-    // No remote at all: the push cannot go anywhere.
-    let context = GithubBranchContext {
-      owner: "acme".to_string(),
-      repo: "widget".to_string(),
-      branch: "feature".to_string(),
-    };
-    page.update_in(cx, |page, window, cx| {
-      page.publish_branch_and_create_pull_request(context, window, cx);
-    });
-    let command = page.update(cx, |page, _| {
-      page._repo_command_task.take().expect("push task")
-    });
-    command.await;
-    cx.run_until_parked();
-
-    assert!(
-      !cx.update(|window, cx| window.has_active_dialog(cx)),
-      "a push that failed must not open the form"
-    );
-    page.read_with(cx, |page, _| {
-      assert!(page.pending_pull_request.is_none());
-    });
-  }
-
-  #[gpui::test(iterations = 10)]
   async fn a_second_git_command_is_refused_while_one_runs(cx: &mut TestAppContext) {
     let repo = TempRepo::init("session-page-command-in-flight");
     commit_text_file(&repo.path, Path::new("README.md"), "v1\n", "initial");
@@ -2146,72 +1942,6 @@ mod tests {
       assert!(ids.contains(&CommandPaletteCommandId::Commit));
       assert!(!ids.contains(&CommandPaletteCommandId::ContinueRebase));
     });
-  }
-
-  #[gpui::test]
-  async fn a_failed_command_is_reported_under_its_own_key(cx: &mut TestAppContext) {
-    let repo = TempRepo::init("session-page-telemetry");
-    commit_text_file(&repo.path, Path::new("README.md"), "v1\n", "initial");
-    // A missing remote is the user's setup, reported as expected: a remote
-    // that does not exist makes the push fail for real.
-    let missing_remote = repo.path.join("missing-remote.git");
-    let status = std::process::Command::new("git")
-      .current_dir(&repo.path)
-      .args(["remote", "add", "origin"])
-      .arg(&missing_remote)
-      .status()
-      .expect("run git remote add");
-    assert!(status.success(), "add the unreachable remote");
-
-    let (page, cx) = add_session_page_window(repo.path.clone(), cx);
-    cx.run_until_parked();
-    let sink = crate::git_telemetry::test_support::RecordingSink::install();
-
-    page.update_in(cx, |page, window, cx| {
-      page
-        .run_repo_command(RepoCommand::Push, window, cx)
-        .expect("push starts");
-    });
-    let command = page.update(cx, |page, _| {
-      page._repo_command_task.take().expect("command task")
-    });
-    command.await;
-    cx.run_until_parked();
-
-    use crate::git_telemetry::test_support::Report;
-    let reports = sink.reports();
-    assert!(
-      reports.contains(&Report::Breadcrumb("Push".to_string())),
-      "the command that ran leaves a trail, got {reports:?}"
-    );
-    assert!(
-      reports.iter().any(|report| matches!(
-        report,
-        Report::Unexpected { operation, .. } if operation == RepoCommand::Push.telemetry_key()
-      )),
-      "the failure is filed under the command's own key, got {reports:?}"
-    );
-
-    // A command that works reports its run, and no error.
-    page.update_in(cx, |page, window, cx| {
-      page
-        .run_repo_command(RepoCommand::StageAll, window, cx)
-        .expect("stage all starts");
-    });
-    let command = page.update(cx, |page, _| {
-      page._repo_command_task.take().expect("command task")
-    });
-    command.await;
-    cx.run_until_parked();
-
-    let reports = sink.reports();
-    assert!(
-      !reports
-        .iter()
-        .any(|report| matches!(report, Report::Unexpected { .. })),
-      "success is not a crash, got {reports:?}"
-    );
-    crate::git_telemetry::set_test_sink(None);
   }
 
   #[test]

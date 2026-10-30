@@ -8,7 +8,6 @@ use serde::{Deserialize, Serialize};
 
 use crate::AppProfile;
 use crate::config::{AppSettings, ConfigStore};
-use crate::sentry_context::capture_unexpected_error;
 
 const SETTINGS_FILE_NAME: &str = "settings.json";
 
@@ -23,7 +22,6 @@ pub(crate) fn take_startup_error() -> Option<String> {
 
 fn record_error(op: &'static str, err: &dyn std::error::Error, notify: bool) {
   log::warn!("{op}: {err}");
-  capture_unexpected_error(op, err, Default::default());
   if notify {
     STARTUP_ERROR.with(|slot| *slot.borrow_mut() = Some(err.to_string()));
   }
@@ -83,8 +81,6 @@ struct SettingsDoc {
   #[serde(deserialize_with = "lenient")]
   menu_bar_icon: Option<bool>,
   #[serde(deserialize_with = "lenient")]
-  analytics_enabled: Option<bool>,
-  #[serde(deserialize_with = "lenient")]
   onboarding_done: Option<bool>,
   #[serde(deserialize_with = "lenient")]
   find_case_sensitive: Option<bool>,
@@ -126,7 +122,6 @@ impl SettingsDoc {
         .unwrap_or(defaults.files_show_gitignored),
       files_show_hidden: self.files_show_hidden.unwrap_or(defaults.files_show_hidden),
       menu_bar_icon: self.menu_bar_icon.unwrap_or(defaults.menu_bar_icon),
-      analytics_enabled: self.analytics_enabled.unwrap_or(defaults.analytics_enabled),
       onboarding_done: self.onboarding_done.unwrap_or(defaults.onboarding_done),
       find_case_sensitive: self
         .find_case_sensitive
@@ -155,7 +150,6 @@ impl From<AppSettings> for SettingsDoc {
       files_show_gitignored: Some(settings.files_show_gitignored),
       files_show_hidden: Some(settings.files_show_hidden),
       menu_bar_icon: Some(settings.menu_bar_icon),
-      analytics_enabled: Some(settings.analytics_enabled),
       onboarding_done: Some(settings.onboarding_done),
       find_case_sensitive: Some(settings.find_case_sensitive),
       find_whole_word: Some(settings.find_whole_word),
@@ -285,7 +279,6 @@ mod tests {
       files_show_gitignored: false,
       files_show_hidden: false,
       menu_bar_icon: false,
-      analytics_enabled: false,
       onboarding_done: true,
       find_case_sensitive: true,
       find_whole_word: true,

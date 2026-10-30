@@ -37,17 +37,6 @@ pub(crate) fn project_avatar(_root: &Path, fallback: Option<String>, _cx: &App) 
   fallback
 }
 
-pub(crate) fn user_avatar(fallback: Option<String>, _cx: &App) -> Option<String> {
-  #[cfg(any(test, feature = "test-support"))]
-  if let Some(avatar) = _cx
-    .try_global::<DriverPresentation>()
-    .and_then(|presentation| presentation.user_avatar.as_ref())
-  {
-    return Some(avatar.clone());
-  }
-  fallback
-}
-
 #[cfg(test)]
 mod tests {
   use super::*;
@@ -63,9 +52,7 @@ mod tests {
         project_avatar(Path::new("/repo"), avatar.clone(), cx),
         avatar
       );
-      assert_eq!(user_avatar(avatar.clone(), cx), avatar);
       assert_eq!(project_avatar(Path::new("/repo"), None, cx), None);
-      assert_eq!(user_avatar(None, cx), None);
     });
   }
 
@@ -90,11 +77,9 @@ mod tests {
         project_avatar(Path::new("/other"), fallback.clone(), cx),
         fallback
       );
-      assert_eq!(user_avatar(None, cx).as_deref(), Some("user-image"));
       cx.set_global(DriverPresentation::default());
       assert_eq!(profile_badge_label(AppProfile::Dev, cx), Some("DEV"));
       assert_eq!(project_avatar(Path::new("/repo"), None, cx), None);
-      assert_eq!(user_avatar(None, cx), None);
     });
   }
 }

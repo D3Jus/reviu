@@ -22,13 +22,12 @@ use crate::{
   FocusCenterPaneRight, FocusCenterPaneUp, ForcePushChanges, JumpToLatestMessage,
   MoveCenterPaneDown, MoveCenterPaneLeft, MoveCenterPaneRight, MoveCenterPaneUp, NewAgentSession,
   NewAgentWorktreeSession, NewFile, NewFileInFilesPanel, NextAnnotation, NextCenterTab,
-  OpenFilesSidebar, OpenGitChangesSidebar, OpenGitHistorySidebar, OpenProject,
-  OpenPullRequestSidebar, OpenReviewSidebar, OpenSettingsPage, OpenTerminalInSplitDown,
-  OpenTerminalInSplitRight, PreviousAnnotation, PreviousCenterTab, PullChanges, PushChanges,
-  RenameSelectedFileItem, RestoreFile, RestoreHunk, ReturnFocusToEditor, SaveFileAs,
-  SendReviewCommentsToAgent, ShowBranchSwitcher, ShowCommandPalette, ShowFileSearch,
-  ShowGlobalSearch, SplitPaneDown, SplitPaneRight, ToggleDiffView, ToggleFileDiff, ToggleFileStage,
-  ToggleHideWhitespace, ToggleHunkStage,
+  OpenFilesSidebar, OpenGitChangesSidebar, OpenGitHistorySidebar, OpenProject, OpenReviewSidebar,
+  OpenSettingsPage, OpenTerminalInSplitDown, OpenTerminalInSplitRight, PreviousAnnotation,
+  PreviousCenterTab, PullChanges, PushChanges, RenameSelectedFileItem, RestoreFile, RestoreHunk,
+  ReturnFocusToEditor, SaveFileAs, SendReviewCommentsToAgent, ShowBranchSwitcher,
+  ShowCommandPalette, ShowFileSearch, ShowGlobalSearch, SplitPaneDown, SplitPaneRight,
+  ToggleDiffView, ToggleFileDiff, ToggleFileStage, ToggleHideWhitespace, ToggleHunkStage,
 };
 
 pub const SHOW_COMMAND_PALETTE_SHORTCUT: &str = "cmd-shift-p";
@@ -56,7 +55,6 @@ const OPEN_GIT_HISTORY_SIDEBAR_CONTEXT: &str = "WorkspaceSession";
 const OPEN_GIT_CHANGES_SIDEBAR_CONTEXT: &str = "WorkspaceSession";
 const OPEN_FILES_SIDEBAR_CONTEXT: &str = "WorkspaceSession";
 const OPEN_REVIEW_SIDEBAR_CONTEXT: &str = "WorkspaceSession";
-const OPEN_PULL_REQUEST_SIDEBAR_CONTEXT: &str = "WorkspaceSession";
 const TOGGLE_DIFF_VIEW_CONTEXT: &str = "WorkspaceSession";
 const REVIEW_ANNOTATION_CONTEXT: &str = "WorkspaceSession";
 const HUNK_ACTION_CONTEXT: &str = "WorkspaceSession";
@@ -112,7 +110,6 @@ pub enum ShortcutId {
   OpenGitChangesSidebar,
   OpenFilesSidebar,
   OpenReviewSidebar,
-  OpenPullRequestSidebar,
   ToggleDiffView,
   ToggleFileDiff,
   ToggleHunkExpanded,
@@ -171,7 +168,6 @@ impl ShortcutId {
       ShortcutId::OpenGitChangesSidebar => "open_git_changes_sidebar",
       ShortcutId::OpenFilesSidebar => "open_files_sidebar",
       ShortcutId::OpenReviewSidebar => "open_review_sidebar",
-      ShortcutId::OpenPullRequestSidebar => "open_pull_request_sidebar",
       ShortcutId::ToggleDiffView => "toggle_diff_view",
       ShortcutId::ToggleFileDiff => "toggle_file_diff",
       ShortcutId::ToggleHunkExpanded => "toggle_hunk_expanded",
@@ -230,7 +226,6 @@ impl ShortcutId {
       "open_git_changes_sidebar" => Some(ShortcutId::OpenGitChangesSidebar),
       "open_files_sidebar" => Some(ShortcutId::OpenFilesSidebar),
       "open_review_sidebar" => Some(ShortcutId::OpenReviewSidebar),
-      "open_pull_request_sidebar" => Some(ShortcutId::OpenPullRequestSidebar),
       "toggle_diff_view" => Some(ShortcutId::ToggleDiffView),
       "toggle_file_diff" => Some(ShortcutId::ToggleFileDiff),
       "toggle_hunk_expanded" => Some(ShortcutId::ToggleHunkExpanded),
@@ -275,7 +270,7 @@ pub struct ShortcutDefinition {
   pub active_contexts: &'static [&'static str],
 }
 
-const SHORTCUT_DEFINITIONS: [ShortcutDefinition; 54] = [
+const SHORTCUT_DEFINITIONS: [ShortcutDefinition; 53] = [
   ShortcutDefinition {
     id: ShortcutId::ShowCommandPalette,
     title: "Command Palette",
@@ -849,17 +844,6 @@ const SHORTCUT_DEFINITIONS: [ShortcutDefinition; 54] = [
     active_contexts: &SESSION_ONLY_ACTIVE_CONTEXTS,
   },
   ShortcutDefinition {
-    id: ShortcutId::OpenPullRequestSidebar,
-    title: "Show Pull Request",
-    description: "Switch the right panel to the pull request of the current branch.",
-    scope_label: "Projects",
-    category: ShortcutCategory::Review,
-    keystroke: "ctrl-alt-g",
-    context: OPEN_PULL_REQUEST_SIDEBAR_CONTEXT,
-    display_context: WORKSPACE_SESSION_CONTEXT,
-    active_contexts: &SESSION_ONLY_ACTIVE_CONTEXTS,
-  },
-  ShortcutDefinition {
     id: ShortcutId::OpenSettingsPage,
     title: "Open Settings",
     description: "Open settings over the workspace.",
@@ -1042,9 +1026,6 @@ impl ShortcutDefinition {
       ShortcutId::OpenFilesSidebar => KeyBinding::new(keystroke, OpenFilesSidebar, Some(&context)),
       ShortcutId::OpenReviewSidebar => {
         KeyBinding::new(keystroke, OpenReviewSidebar, Some(&context))
-      }
-      ShortcutId::OpenPullRequestSidebar => {
-        KeyBinding::new(keystroke, OpenPullRequestSidebar, Some(&context))
       }
       ShortcutId::ToggleDiffView => KeyBinding::new(keystroke, ToggleDiffView, Some(&context)),
       ShortcutId::ToggleFileDiff => KeyBinding::new(keystroke, ToggleFileDiff, Some(&context)),
@@ -1313,7 +1294,6 @@ fn palette_command_shortcut(command: CommandPaletteCommandId) -> Option<Shortcut
     Command::ShowReview => Some(ShortcutId::OpenReviewSidebar),
     Command::ShowFiles => Some(ShortcutId::OpenFilesSidebar),
     Command::ShowHistory => Some(ShortcutId::OpenGitHistorySidebar),
-    Command::ShowPullRequest => Some(ShortcutId::OpenPullRequestSidebar),
     Command::ShowFileSearch => Some(ShortcutId::ShowFileSearch),
     Command::ShowGlobalSearch => Some(ShortcutId::ShowGlobalSearch),
     Command::ToggleDiffView => Some(ShortcutId::ToggleDiffView),
@@ -1332,8 +1312,6 @@ fn palette_command_shortcut(command: CommandPaletteCommandId) -> Option<Shortcut
     | Command::UndoLastCommit
     | Command::Amend
     | Command::DiscardReview
-    | Command::SubmitPullRequestReview
-    | Command::DiscardPullRequestReview
     | Command::AcceptAllCurrentConflicts
     | Command::AcceptAllIncomingConflicts
     | Command::CreateBranch
@@ -1347,8 +1325,6 @@ fn palette_command_shortcut(command: CommandPaletteCommandId) -> Option<Shortcut
     | Command::InteractiveRebaseEditBranch
     | Command::InteractiveRebaseHeadCount
     | Command::AbortRebase
-    | Command::CreatePullRequest
-    | Command::OpenPullRequest
     | Command::CherryPick
     | Command::StageAll
     | Command::UnstageAll
@@ -1359,18 +1335,12 @@ fn palette_command_shortcut(command: CommandPaletteCommandId) -> Option<Shortcut
     | Command::ApplyStash
     | Command::DropStash
     | Command::PopStash
-    | Command::OpenGithubFromUrl
     | Command::OpenGitConfigPage
     | Command::OpenSettingsFile
     | Command::OpenKeybindingsFile
-    | Command::OpenBillingPage
     | Command::OpenAboutPage
     | Command::OpenLogs
-    | Command::RevealLogs
-    | Command::SendFeedback
-    | Command::SignIn
-    | Command::SignOut
-    | Command::OpenBrowserExtensions => None,
+    | Command::RevealLogs => None,
   }
 }
 
@@ -1779,7 +1749,6 @@ pub(crate) fn with_shortcut_action<T>(id: ShortcutId, f: impl FnOnce(&dyn Action
     ShortcutId::OpenGitChangesSidebar => f(&OpenGitChangesSidebar),
     ShortcutId::OpenFilesSidebar => f(&OpenFilesSidebar),
     ShortcutId::OpenReviewSidebar => f(&OpenReviewSidebar),
-    ShortcutId::OpenPullRequestSidebar => f(&OpenPullRequestSidebar),
     ShortcutId::ToggleDiffView => f(&ToggleDiffView),
     ShortcutId::ToggleFileDiff => f(&ToggleFileDiff),
     ShortcutId::ToggleHunkExpanded => f(&ToggleHunkExpanded),
@@ -1852,8 +1821,6 @@ mod tests {
     );
 
     assert_eq!(palette_command_shortcut(Command::CherryPick), None);
-    assert_eq!(palette_command_shortcut(Command::SignOut), None);
-    assert_eq!(palette_command_shortcut(Command::SendFeedback), None);
   }
 
   fn context_stack(_surface: &str) -> Vec<KeyContext> {
@@ -2442,7 +2409,6 @@ mod tests {
       (ShortcutId::OpenReviewSidebar, "ctrl-alt-r"),
       (ShortcutId::OpenFilesSidebar, "cmd-shift-e"),
       (ShortcutId::OpenGitHistorySidebar, "ctrl-alt-i"),
-      (ShortcutId::OpenPullRequestSidebar, "ctrl-alt-g"),
     ];
 
     for (id, keystroke) in dock {

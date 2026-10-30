@@ -151,7 +151,7 @@ fn accept(kind: ConfigKind, result: Result<String, String>, cx: &mut App) {
 }
 
 pub(crate) fn apply_settings(settings: AppSettings, window: Option<&mut Window>, cx: &mut App) {
-  let previous = cx.try_global::<AppSettings>().copied();
+  let _previous = cx.try_global::<AppSettings>().copied();
   cx.set_global(settings);
   cx.set_global(settings.find_options());
   cx.set_global(editor::EditorSettings {
@@ -170,22 +170,6 @@ pub(crate) fn apply_settings(settings: AppSettings, window: Option<&mut Window>,
         ThemeMode::Light
       };
       Theme::change(mode, window, cx);
-    }
-  }
-  if previous.map(|settings| settings.menu_bar_icon) != Some(settings.menu_bar_icon) {
-    #[cfg(not(test))]
-    {
-      crate::status_bar::set_status_bar_enabled(
-        settings.menu_bar_icon,
-        crate::workspace::STATUS_BAR_ICON_PNG,
-      );
-      if settings.menu_bar_icon
-        && cx.has_global::<crate::github_notifications::GithubNotificationsStore>()
-      {
-        let notifications = crate::github_notifications::GithubNotificationsStore::list(cx);
-        let unread = crate::github_notifications::GithubNotificationsStore::unread_count(cx);
-        crate::status_bar::update_status_bar(unread, &notifications);
-      }
     }
   }
   cx.refresh_windows();

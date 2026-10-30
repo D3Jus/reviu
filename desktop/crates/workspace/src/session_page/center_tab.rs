@@ -15,20 +15,6 @@ pub(super) enum CenterTabKind {
   PaneLauncher,
 }
 
-impl CenterTabKind {
-  pub(super) fn telemetry_tag(self) -> &'static str {
-    match self {
-      Self::Chat => "chat",
-      Self::File => "file",
-      Self::Diff => "diff",
-      Self::InteractiveRebase => "interactive_rebase",
-      Self::ProjectSearch => "project_search",
-      Self::Terminal => "terminal",
-      Self::PaneLauncher => "pane_launcher",
-    }
-  }
-}
-
 #[derive(Clone)]
 pub(super) enum CenterTabIcon {
   FileType(SharedString),
@@ -63,10 +49,6 @@ pub(super) enum CenterTabSnapshot {
   },
   Commit {
     oid: String,
-  },
-  PullRequestRange {
-    base: String,
-    head: String,
   },
 }
 
@@ -171,18 +153,6 @@ impl CenterTab {
       path: Some(path),
       conversation_id: None,
       snapshot: Some(CenterTabSnapshot::Commit { oid }),
-      terminal_id: None,
-      untitled_id: None,
-      pane_launcher_id: None,
-    }
-  }
-
-  pub(super) fn pull_request_snapshot(path: PathBuf, base: String, head: String) -> Self {
-    Self {
-      kind: CenterTabKind::Diff,
-      path: Some(path),
-      conversation_id: None,
-      snapshot: Some(CenterTabSnapshot::PullRequestRange { base, head }),
       terminal_id: None,
       untitled_id: None,
       pane_launcher_id: None,

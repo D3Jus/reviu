@@ -10,7 +10,6 @@ use gpui::Keystroke;
 
 use crate::AppProfile;
 use crate::config::ConfigStore;
-use crate::sentry_context::capture_unexpected_error;
 use crate::shortcuts::ShortcutId;
 
 const KEYBINDINGS_FILE_NAME: &str = "keybindings.json";
@@ -28,7 +27,6 @@ pub(crate) fn take_startup_error() -> Option<String> {
 
 fn record_error(op: &'static str, err: &dyn std::error::Error, notify: bool) {
   log::warn!("{op}: {err}");
-  capture_unexpected_error(op, err, Default::default());
   if notify {
     STARTUP_ERROR.with(|slot| *slot.borrow_mut() = Some(err.to_string()));
   }

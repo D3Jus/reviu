@@ -33,7 +33,6 @@ actions!(
     ReturnFocusToEditor,
     OpenFilesSidebar,
     OpenReviewSidebar,
-    OpenPullRequestSidebar,
     PullChanges,
     PushChanges,
     ForcePushChanges,
@@ -58,11 +57,9 @@ actions!(
     RenameSelectedFileItem,
     DeleteSelectedFileItem,
     AcceptBothConflict,
-    OpenBillingPage,
     OpenGitConfigPage,
     OpenSettingsPage,
     OpenAboutPage,
-    OpenBrowserExtensions,
   ]
 );
 
@@ -73,19 +70,12 @@ mod agent_notification;
 mod agent_review;
 mod agent_review_store;
 mod agent_settings;
-mod analytics;
 mod annotations;
-mod api;
 pub mod app_log_sink;
 mod app_profile;
 mod app_update;
 mod askpass;
-pub mod auth_flow;
-mod auth_state;
-mod billing_dialog;
-mod browser_extensions_dialog;
 mod command_usage;
-mod dock_badge;
 
 mod center_file_drag;
 mod center_pane_controls;
@@ -94,60 +84,39 @@ mod config;
 mod config_file;
 mod config_reload;
 mod conversation_hub;
-mod crash_report;
 mod date_format;
 mod diff_toolbar;
 mod diff_view_policy;
 mod dock_panel;
 #[cfg(any(test, feature = "test-support"))]
 mod driver_support;
-mod feedback_dialog;
 mod file_preview;
 mod file_search_palette;
 mod file_tree;
 mod file_view;
 mod git_config_page;
-mod git_telemetry;
-pub mod github_navigation;
-mod github_notifications;
-mod github_shared;
 mod history_list;
 mod hunk_actions;
-mod inbox;
 mod interactive_rebase;
 mod interactive_rebase_todo_view;
 mod keybindings_file;
-mod merge_dialog;
 mod open_intent;
 mod palette_actions;
 mod palette_branches;
 mod presentation;
-mod pricing_copy;
-mod pro_promise;
 mod project_files;
 mod project_search_view;
-mod pull_request_checks;
-mod pull_request_dialog;
-mod pull_request_merge;
-mod pull_request_refresh;
-mod pull_request_review_comments;
-mod pull_request_review_submission;
-mod pull_request_reviewers;
-pub mod pull_request_surface;
 mod repo_command;
 mod repo_snapshot;
 mod repo_state;
 mod review_destination;
 mod review_list;
-mod review_submit_dialog;
-mod sentry_context;
 mod session_list;
 mod session_page;
 mod settings_file;
 mod settings_page;
 mod shortcut_bindings;
 mod shortcuts;
-pub mod status_bar;
 mod status_poll;
 mod svg_preview;
 #[cfg(test)]
@@ -161,11 +130,6 @@ pub use actions::{
 };
 pub use app_profile::{AppProfile, URL_SCHEME_PROD};
 pub use askpass::handle_askpass_invocation;
-pub use auth_state::AuthStateStore;
-pub use crash_report::{
-  StartupCrashReport, install_crash_reporter, show_startup_crash_report_notification,
-  take_pending_startup_crash_report,
-};
 #[cfg(any(test, feature = "test-support"))]
 pub use driver_support::{
   DriverBranchKind, DriverBranchRef, DriverGitAction, DriverInteractiveRebaseAction,

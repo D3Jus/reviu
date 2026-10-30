@@ -6,27 +6,21 @@ use editor::{Copy, Cut, Paste, Quit, Redo, Save, SelectAll, Undo};
 #[cfg(test)]
 use gpui::Keystroke;
 use gpui::{
-  AnyWindowHandle, App, Context, Decorations, Entity, FocusHandle, Focusable, Global, Menu,
-  MenuItem, Render, Subscription, Task, Window, WindowButton, div, img, prelude::*, px,
+  App, Context, Decorations, Entity, FocusHandle, Focusable, Menu, MenuItem, Render, Subscription,
+  Task, Window, WindowButton, div, prelude::*, px,
 };
 use gpui_component::{
-  ActiveTheme as _, Disableable, Icon, IconName, Sizable as _, Theme, h_flex, kbd::Kbd,
-  notification::Notification, spinner::Spinner, tag::Tag,
+  ActiveTheme as _, Disableable, Icon, IconName, Sizable as _, Theme, h_flex, kbd::Kbd, tag::Tag,
 };
 
 use crate::AppProfile;
 use crate::about_dialog::open_about_dialog;
-use crate::api::ApiClient;
 use crate::app_update::{
-  AppUpdateNotificationId, AppUpdateState, AppUpdateStore, AvailableAppUpdate, UpdateArtifact,
-  current_arch, current_platform, resolved_build_version, start_update_download,
+  AppUpdateNotificationId, AppUpdateState, AppUpdateStore, start_update_download,
   update_action_label,
 };
-use crate::auth_state::{AuthState, AuthStateStore};
-use crate::billing_dialog::open_billing_dialog;
 use crate::config::{AppSettings as PersistedSettings, ConfigStore};
 use crate::git_config_page::open_git_config_dialog;
-use crate::github_notifications::{self, GithubNotificationsStore};
 use crate::session_page::SessionPage;
 use crate::settings_page::open_settings_dialog;
 use crate::shortcuts::{self, ShortcutId};
@@ -34,16 +28,13 @@ use crate::workspace_onboarding::WorkspaceOnboarding;
 use crate::workspace_window::WorkspaceWindow;
 use crate::{ShowCommandPalette, ShowFileSearch};
 use ui::{
-  Button, ButtonVariants as _, GLOBAL_BAR_HEIGHT, REVIU_WORDMARK_WIDTH_PX, UiIconName,
-  UserMenuConfig, UserMenuPage, UserMenuState, UserMenuUser, WindowExt, reviu_logo_path, user_menu,
+  Button, ButtonVariants as _, GLOBAL_BAR_HEIGHT, UiIconName, UserMenuConfig, UserMenuPage,
+  UserMenuState, WindowExt, user_menu,
 };
 
 type NavigateFn = dyn Fn(&mut Window, &mut App);
 
 const UPDATE_CHECK_INTERVAL: Duration = Duration::from_secs(12 * 60 * 60);
-
-pub const STATUS_BAR_ICON_PNG: &[u8] =
-  include_bytes!("../../reviu/assets/reviu_status_bar_icon.png");
 
 fn should_run_scheduled_update_check(state: Option<AppUpdateState>) -> bool {
   !matches!(
@@ -58,48 +49,7 @@ fn should_run_scheduled_update_check(state: Option<AppUpdateState>) -> bool {
   )
 }
 
-#[cfg(any(test, feature = "test-support"))]
-fn github_notification_json(notification: crate::api::GithubNotification) -> serde_json::Value {
-  serde_json::json!({
-    "id": notification.id,
-    "repository": {
-      "name": notification.repository.name,
-      "full_name": notification.repository.full_name,
-      "owner": notification.repository.owner.map(|owner| serde_json::json!({
-        "login": owner.login,
-        "avatar_url": owner.avatar_url,
-      })),
-    },
-    "subject": {
-      "title": notification.subject.title,
-      "type": notification.subject.subject_type,
-      "url": notification.subject.url,
-      "latest_comment_url": notification.subject.latest_comment_url,
-    },
-    "reason": notification.reason,
-    "unread": notification.unread,
-    "updated_at": notification.updated_at,
-    "last_read_at": notification.last_read_at,
-    "url": notification.url,
-    "subscription_url": notification.subscription_url,
-  })
-}
-
 pub fn build_app_menus() -> Vec<Menu> {
-  build_app_menus_with_subscription(false)
-}
-
-pub(crate) fn build_app_menus_for_current_auth(cx: &App) -> Vec<Menu> {
-  build_app_menus_with_subscription(AuthStateStore::has_subscription(cx))
-}
-
-fn build_app_menus_with_subscription(has_subscription: bool) -> Vec<Menu> {
-  let billing_label = if has_subscription {
-    "Billing"
-  } else {
-    "Reviu Pro"
-  };
-
   vec![
     Menu {
       name: "Reviu".into(),
@@ -109,9 +59,6 @@ fn build_app_menus_with_subscription(has_subscription: bool) -> Vec<Menu> {
         MenuItem::separator(),
         MenuItem::action("Settings...", crate::OpenSettingsPage),
         MenuItem::action("Git Config...", crate::OpenGitConfigPage),
-        MenuItem::action("Browser Extension...", crate::OpenBrowserExtensions),
-        MenuItem::separator(),
-        MenuItem::action(billing_label, crate::OpenBillingPage),
         MenuItem::separator(),
         MenuItem::action("Quit Reviu", Quit),
       ],
@@ -146,35 +93,12 @@ fn build_app_menus_with_subscription(has_subscription: bool) -> Vec<Menu> {
   ]
 }
 
-#[derive(Clone)]
-pub struct WorkspaceApi {
-  pub api: ApiClient,
-}
-
-impl Global for WorkspaceApi {}
-
-impl WorkspaceApi {
-  pub fn new() -> Self {
-    Self {
-      api: ApiClient::new(),
-    }
-  }
-
-  pub fn global(cx: &App) -> &Self {
-    cx.global::<Self>()
-  }
-}
-
 pub struct WorkspaceView {
   session_page: Entity<SessionPage>,
   onboarding_page: Entity<WorkspaceOnboarding>,
-  window_handle: AnyWindowHandle,
   _update_check_task: Option<Task<()>>,
   _periodic_update_check_task: Option<Task<()>>,
-  _notification_poll_task: Option<Task<()>>,
   _config_watch_task: Option<Task<()>>,
-  #[cfg(any(target_os = "linux", target_os = "windows"))]
-  _status_bar_event_task: Option<Task<()>>,
   _subscriptions: Vec<Subscription>,
 }
 
@@ -205,7 +129,7 @@ impl WorkspaceView {
   }
 
   fn sync_app_menus(cx: &mut App) {
-    cx.set_menus(build_app_menus_for_current_auth(cx));
+    cx.set_menus(build_app_menus());
   }
 
   fn quit_action(&mut self, _: &Quit, window: &mut Window, cx: &mut Context<Self>) {
@@ -223,20 +147,13 @@ impl WorkspaceView {
     let settings = ConfigStore::load_app_settings();
     let settings_error = crate::settings_file::take_startup_error();
 
-    cx.set_global(WorkspaceApi::new());
-    cx.set_global(AuthStateStore::default());
     cx.set_global(AppUpdateStore::default());
-    cx.set_global(GithubNotificationsStore::default());
 
     crate::config_reload::apply_settings(settings, Some(window), cx);
     cx.set_global(shortcuts::load_shortcut_overrides());
     let keybindings_error = crate::keybindings_file::take_startup_error();
     cx.set_global(crate::command_usage::CommandUsageStore::load());
     crate::command_usage::install_palette_usage_recorder(cx);
-    crate::analytics::Analytics::init(cx);
-    crate::analytics::track(cx, "app_started");
-    // Signing in is app-wide, not something a page owns.
-    crate::auth_flow::load_stored_token(cx);
     crate::install_app_key_bindings(cx);
 
     // Deep links, pro prompts, and git askpass requests land without their own window.
@@ -278,24 +195,15 @@ impl WorkspaceView {
     let view = Self {
       session_page,
       onboarding_page,
-      window_handle: window.window_handle(),
       _update_check_task: None,
       _periodic_update_check_task: None,
-      _notification_poll_task: None,
       _config_watch_task: Some(crate::config_reload::watch(cx)),
-      #[cfg(any(target_os = "linux", target_os = "windows"))]
-      _status_bar_event_task: None,
       _subscriptions: Vec::new(),
     };
 
     let mut view = view;
     let subscription = cx.observe_window_appearance(window, |this, window, cx| {
       this.on_window_appearance_changed(window, cx);
-    });
-    view._subscriptions.push(subscription);
-    let subscription = cx.observe_global::<AuthStateStore>(|_, cx| {
-      Self::sync_app_menus(cx);
-      cx.notify();
     });
     view._subscriptions.push(subscription);
     let subscription = cx.observe_global::<shortcuts::ShortcutOverrides>(|_, cx| {
@@ -306,9 +214,6 @@ impl WorkspaceView {
     Self::sync_app_menus(cx);
     view.check_for_updates(cx);
     view.start_periodic_update_checks(cx);
-    view.start_notification_polling(cx);
-    #[cfg(any(target_os = "linux", target_os = "windows"))]
-    view.start_status_bar_event_polling(cx);
 
     view
   }
@@ -353,19 +258,6 @@ impl WorkspaceView {
 
   #[cfg(any(test, feature = "test-support"))]
   #[doc(hidden)]
-  pub fn open_pull_request_file_for_driver(
-    &mut self,
-    rel_path: Option<PathBuf>,
-    window: &mut Window,
-    cx: &mut Context<Self>,
-  ) -> Result<(), gpui::SharedString> {
-    self.session_page.update(cx, |page, cx| {
-      page.open_pull_request_file_for_driver(rel_path, window, cx)
-    })
-  }
-
-  #[cfg(any(test, feature = "test-support"))]
-  #[doc(hidden)]
   pub fn git_state_for_driver(&self, cx: &App) -> serde_json::Value {
     self
       .session_page
@@ -378,100 +270,6 @@ impl WorkspaceView {
     self
       .session_page
       .read_with(cx, |page, _| page.notification_log_for_driver())
-  }
-
-  #[cfg(any(test, feature = "test-support"))]
-  #[doc(hidden)]
-  pub fn github_notifications_for_driver(&self, cx: &App) -> serde_json::Value {
-    let notifications = GithubNotificationsStore::list(cx);
-    serde_json::json!({
-      "unread_count": GithubNotificationsStore::unread_count(cx),
-      "notifications": notifications.into_iter().map(github_notification_json).collect::<Vec<_>>(),
-    })
-  }
-
-  #[cfg(any(test, feature = "test-support"))]
-  #[doc(hidden)]
-  pub fn refresh_github_notifications_for_driver(
-    &self,
-    cx: &mut App,
-  ) -> Result<(), gpui::SharedString> {
-    let notifications = WorkspaceApi::global(cx)
-      .api
-      .fetch_github_notifications()
-      .map_err(|error| format!("Fetching GitHub notifications failed: {error}"))?;
-    GithubNotificationsStore::set(cx, notifications);
-    cx.refresh_windows();
-    Ok(())
-  }
-
-  #[cfg(any(test, feature = "test-support"))]
-  #[doc(hidden)]
-  pub fn open_github_notification_for_driver(
-    &self,
-    id: String,
-    cx: &mut App,
-  ) -> Result<(), gpui::SharedString> {
-    let notification = GithubNotificationsStore::list(cx)
-      .into_iter()
-      .find(|notification| notification.id == id)
-      .ok_or_else(|| format!("GitHub notification not found: {id}"))?;
-    github_notifications::open_notification(&notification, cx);
-    cx.refresh_windows();
-    Ok(())
-  }
-
-  #[cfg(any(test, feature = "test-support"))]
-  #[doc(hidden)]
-  pub fn mark_github_notification_done_for_driver(
-    &self,
-    id: String,
-    cx: &mut App,
-  ) -> Result<(), gpui::SharedString> {
-    let exists = GithubNotificationsStore::list(cx)
-      .iter()
-      .any(|notification| notification.id == id);
-    if !exists {
-      return Err(format!("GitHub notification not found: {id}").into());
-    }
-    WorkspaceApi::global(cx)
-      .api
-      .mark_notification_done(&id)
-      .map_err(|error| format!("Marking GitHub notification done failed: {error}"))?;
-    GithubNotificationsStore::remove(cx, &id);
-    cx.refresh_windows();
-    Ok(())
-  }
-
-  #[cfg(any(test, feature = "test-support"))]
-  #[doc(hidden)]
-  pub fn set_auth_token_for_driver(&self, token: String, cx: &mut App) {
-    WorkspaceApi::global(cx).api.set_bearer_token(token);
-    crate::auth_flow::refresh_me(cx);
-  }
-
-  #[cfg(any(test, feature = "test-support"))]
-  #[doc(hidden)]
-  pub fn auth_state_for_driver(&self, cx: &App) -> serde_json::Value {
-    let state = AuthStateStore::get(cx);
-    let github_access = AuthStateStore::github_access_state(cx);
-    serde_json::json!({
-      "status": match &state {
-        AuthState::Unknown => "unknown",
-        AuthState::Unauthenticated => "unauthenticated",
-        AuthState::Authenticated(_) => "authenticated",
-      },
-      "github_access": match github_access {
-        crate::auth_state::GithubAccessState::NeedsSignIn => "needs_sign_in",
-        crate::auth_state::GithubAccessState::NeedsSubscription => "needs_subscription",
-        crate::auth_state::GithubAccessState::Available => "available",
-      },
-      "signed_in": AuthStateStore::is_signed_in(cx),
-      "has_subscription": AuthStateStore::has_subscription(cx),
-      "has_github_access": AuthStateStore::has_github_access(cx),
-      "github_login": state.github_login(),
-      "app_profile": if AppProfile::current().is_dev() { "dev" } else { "prod" },
-    })
   }
 
   #[cfg(any(test, feature = "test-support"))]
@@ -637,68 +435,10 @@ impl WorkspaceView {
 
   #[cfg(any(test, feature = "test-support"))]
   #[doc(hidden)]
-  pub fn show_pull_request_for_driver(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-    self
-      .session_page
-      .update(cx, |page, cx| page.show_pull_request_for_driver(window, cx));
-  }
-
-  #[cfg(any(test, feature = "test-support"))]
-  #[doc(hidden)]
   pub fn show_review_for_driver(&mut self, window: &mut Window, cx: &mut Context<Self>) {
     self
       .session_page
       .update(cx, |page, cx| page.show_review_for_driver(window, cx));
-  }
-
-  #[cfg(any(test, feature = "test-support"))]
-  #[doc(hidden)]
-  pub fn set_pull_request_details_expanded_for_driver(
-    &mut self,
-    expanded: bool,
-    cx: &mut Context<Self>,
-  ) {
-    self.session_page.update(cx, |page, cx| {
-      page.set_pull_request_details_expanded_for_driver(expanded, cx)
-    });
-  }
-
-  #[cfg(any(test, feature = "test-support"))]
-  #[doc(hidden)]
-  pub fn create_pull_request_review_comment_for_driver(
-    &mut self,
-    rel_path: PathBuf,
-    line: usize,
-    body: String,
-    cx: &mut Context<Self>,
-  ) -> Result<(), gpui::SharedString> {
-    self.session_page.update(cx, |page, cx| {
-      page.create_pull_request_review_comment_for_driver(rel_path, line, body, cx)
-    })
-  }
-
-  #[cfg(any(test, feature = "test-support"))]
-  #[doc(hidden)]
-  pub fn submit_pull_request_review_for_driver(
-    &mut self,
-    body: String,
-    cx: &mut Context<Self>,
-  ) -> Result<(), gpui::SharedString> {
-    self.session_page.update(cx, |page, cx| {
-      page.submit_pull_request_review_for_driver(body, cx)
-    })
-  }
-
-  #[cfg(any(test, feature = "test-support"))]
-  #[doc(hidden)]
-  pub fn discard_pull_request_review_for_driver(
-    &mut self,
-    window: &mut Window,
-    cx: &mut Context<Self>,
-  ) {
-    self.session_page.update(cx, |page, cx| {
-      page.discard_pull_request_review_for_driver(window, cx)
-    });
   }
 
   #[cfg(any(test, feature = "test-support"))]
@@ -767,60 +507,10 @@ impl WorkspaceView {
     Theme::sync_system_appearance(Some(window), cx);
   }
 
-  fn handle_pending_status_bar_notification(&self, cx: &mut App) {
-    if crate::status_bar::take_open_reviu_request() {
-      cx.activate(true);
-    }
-
-    let Some(notification) = crate::status_bar::take_pending_notification() else {
-      return;
-    };
-
-    cx.activate(true);
-    github_notifications::open_notification(&notification, cx);
-  }
-
-  fn check_for_updates(&mut self, cx: &mut Context<Self>) {
-    let api = WorkspaceApi::global(cx).api.clone();
-    let current_version = resolved_build_version(env!("CARGO_PKG_VERSION"));
-    let platform = current_platform().to_string();
-    let arch = current_arch().to_string();
-    let task = cx.spawn(async move |this, cx| {
-      let result = cx
-        .background_spawn(
-          async move { api.check_desktop_update(&current_version, &platform, &arch) },
-        )
-        .await;
-      let _ = this.update(cx, |this, cx| match result {
-        Ok(payload) if payload.update_available => {
-          let Some(artifact) = payload.artifact else {
-            AppUpdateStore::set_error(cx, None, "Update artifact is missing for this platform.");
-            return;
-          };
-          let update = AvailableAppUpdate {
-            latest_version: payload.latest_version,
-            minimum_supported_version: payload.minimum_supported_version,
-            release_notes_url: payload.release_notes_url,
-            force_update: payload.force_update,
-            artifact: UpdateArtifact {
-              url: artifact.url,
-              sha256: artifact.sha256,
-              size: artifact.size,
-            },
-          };
-          AppUpdateStore::set_available_update(cx, Some(update.clone()));
-          this.show_update_notification(update, cx);
-        }
-        Ok(_) => {
-          AppUpdateStore::clear_available_update(cx);
-          this.dismiss_update_notification(cx);
-        }
-        Err(_) => {}
-      });
-    });
-
-    self._update_check_task = Some(task);
-  }
+  // ponytail: the auto-update check went through the (now removed) Pro backend
+  // client, so there is no update source. Left inert; wire a new transport here
+  // if the desktop updater comes back.
+  fn check_for_updates(&mut self, _cx: &mut Context<Self>) {}
 
   fn start_periodic_update_checks(&mut self, cx: &mut Context<Self>) {
     let task = cx.spawn(async move |this, cx| {
@@ -844,114 +534,6 @@ impl WorkspaceView {
     });
 
     self._periodic_update_check_task = Some(task);
-  }
-
-  fn start_notification_polling(&mut self, cx: &mut Context<Self>) {
-    let api = WorkspaceApi::global(cx).api.clone();
-    let task = cx.spawn(async move |this, cx| {
-      loop {
-        cx.background_executor()
-          .timer(Duration::from_secs(60))
-          .await;
-
-        let has_access = this
-          .update(cx, |_, cx| AuthStateStore::has_github_access(cx))
-          .unwrap_or(false);
-
-        if !has_access {
-          continue;
-        }
-
-        let api = api.clone();
-        let result = cx
-          .background_spawn(async move { api.fetch_github_notifications() })
-          .await;
-
-        let _ = this.update(cx, |_, cx| {
-          if let Ok(notifications) = result {
-            GithubNotificationsStore::set(cx, notifications);
-            cx.refresh_windows();
-          }
-        });
-      }
-    });
-
-    self._notification_poll_task = Some(task);
-  }
-
-  #[cfg(any(target_os = "linux", target_os = "windows"))]
-  fn start_status_bar_event_polling(&mut self, cx: &mut Context<Self>) {
-    let task = cx.spawn(async move |this, cx| {
-      loop {
-        cx.background_executor()
-          .timer(Duration::from_millis(250))
-          .await;
-
-        if !crate::status_bar::has_pending_interaction() {
-          continue;
-        }
-
-        let _ = this.update(cx, |this, cx| {
-          this.handle_pending_status_bar_notification(cx);
-        });
-      }
-    });
-
-    self._status_bar_event_task = Some(task);
-  }
-
-  fn dismiss_update_notification(&self, cx: &mut Context<Self>) {
-    let _ = cx.update_window(self.window_handle, |_, window, cx| {
-      window.remove_notification::<AppUpdateNotificationId>(cx);
-    });
-  }
-
-  fn show_update_notification(&self, update: AvailableAppUpdate, cx: &mut Context<Self>) {
-    let latest_version = update.latest_version.clone();
-    let view = cx.entity();
-    let _ = cx.update_window(self.window_handle, move |_, window, cx| {
-      let view = view.clone();
-      window.push_notification(
-        Notification::new()
-          .id::<AppUpdateNotificationId>()
-          .title(format!("New Reviu version {} available", latest_version))
-          .message("Download the latest version.")
-          .autohide(false)
-          .content(move |_, _, _cx| {
-            let view = view.clone();
-            div()
-              .flex()
-              .mt_3()
-              .gap_2()
-              .child(
-                Button::new("workspace-update-changelog")
-                  .ghost()
-                  .compact()
-                  .small()
-                  .label("Changelog")
-                  .on_click(move |_, _, cx| {
-                    cx.open_url("https://reviu.dev/changelog");
-                  }),
-              )
-              .child(
-                Button::new("workspace-update-download")
-                  .primary()
-                  .compact()
-                  .small()
-                  .label("Update")
-                  .child(Icon::new(UiIconName::Download).size_3())
-                  .on_click(move |_, window, cx| {
-                    view.update(cx, |_, cx| start_update_download(cx));
-                    window.on_next_frame(|window, cx| {
-                      window.remove_notification::<AppUpdateNotificationId>(cx);
-                    });
-                  }),
-              )
-              .into_any_element()
-          }),
-        cx,
-      );
-    });
   }
 
   fn global_update_download_action(
@@ -1105,13 +687,8 @@ impl WorkspaceView {
         })
     );
     let current_page = UserMenuPage::Session;
-    let auth_state = AuthStateStore::get(cx);
-    let is_unauthenticated = matches!(auth_state, AuthState::Unauthenticated);
 
-    let open_billing: Rc<NavigateFn> = Rc::new(|window: &mut Window, cx: &mut App| {
-      open_billing_dialog(window, cx);
-    });
-    let open_git_config = Rc::new(|window: &mut Window, cx: &mut App| {
+    let open_git_config: Rc<NavigateFn> = Rc::new(|window: &mut Window, cx: &mut App| {
       open_git_config_dialog(window, cx);
     });
     let open_settings = Rc::new(|window: &mut Window, cx: &mut App| {
@@ -1120,56 +697,19 @@ impl WorkspaceView {
     let open_about = Rc::new(|window: &mut Window, cx: &mut App| {
       open_about_dialog(window, cx);
     });
-    let open_browser_extensions = Rc::new(|window: &mut Window, cx: &mut App| {
-      crate::browser_extensions_dialog::open_browser_extensions_dialog(window, cx);
-    });
-    let sign_in = Rc::new(|_window: &mut Window, cx: &mut App| {
-      crate::auth_flow::start_github_sign_in(cx, "user_menu");
-    });
-    let sign_out = Rc::new(|_window: &mut Window, cx: &mut App| {
-      crate::auth_flow::sign_out(cx);
-      GithubNotificationsStore::clear(cx);
-    });
 
-    let auth_control = match auth_state {
-      AuthState::Authenticated(user) => {
-        let display_name = if user.name.trim().is_empty() {
-          user.email.clone()
-        } else {
-          user.name.clone()
-        };
-
-        user_menu(UserMenuConfig {
-          id: "workspace-auth-menu".into(),
-          state: UserMenuState::Authenticated(UserMenuUser {
-            name: display_name.into(),
-            email: user.email.into(),
-            image: crate::presentation::user_avatar(user.image, cx).map(Into::into),
-          }),
-          current_page,
-          on_open_billing: Some(open_billing.clone()),
-          on_open_git_config: Some(open_git_config),
-          on_open_settings: Some(open_settings),
-          on_open_about: Some(open_about),
-          on_open_browser_extensions: Some(open_browser_extensions.clone()),
-          on_sign_in: Some(sign_in),
-          on_sign_out: Some(sign_out),
-        })
-      }
-      AuthState::Unauthenticated => user_menu(UserMenuConfig {
-        id: "workspace-auth-menu".into(),
-        state: UserMenuState::Unauthenticated,
-        current_page,
-        on_open_billing: Some(open_billing),
-        on_open_git_config: Some(open_git_config),
-        on_open_settings: Some(open_settings),
-        on_open_about: Some(open_about),
-        on_open_browser_extensions: Some(open_browser_extensions),
-        on_sign_in: None,
-        on_sign_out: None,
-      }),
-      _ => None,
-    };
+    let auth_control = user_menu(UserMenuConfig {
+      id: "workspace-auth-menu".into(),
+      state: UserMenuState::Unauthenticated,
+      current_page,
+      on_open_billing: None,
+      on_open_git_config: Some(open_git_config),
+      on_open_settings: Some(open_settings),
+      on_open_about: Some(open_about),
+      on_open_browser_extensions: None,
+      on_sign_in: None,
+      on_sign_out: None,
+    });
 
     let update_button = Button::new("workspace-global-update-download")
       .label(update_action_label(update_state.clone()))
@@ -1184,16 +724,6 @@ impl WorkspaceView {
     } else {
       update_button
     };
-
-    let sign_in_button = Button::new("workspace-global-sign-in")
-      .icon(IconName::Github)
-      .label("Sign in with GitHub")
-      .ghost()
-      .gap_1()
-      .xsmall()
-      .on_click(|_, _, cx| {
-        crate::auth_flow::start_github_sign_in(cx, "top_bar");
-      });
 
     let file_search_button = Button::new("workspace-global-file-search")
       .label("File search")
@@ -1256,9 +786,6 @@ impl WorkspaceView {
     }
     right = right.child(file_search_button);
     right = right.child(command_palette_button);
-    if is_unauthenticated {
-      right = right.child(sign_in_button);
-    }
     if let Some(auth_control) = auth_control {
       right = right.child(auth_control);
     }
@@ -1311,35 +838,6 @@ impl WorkspaceView {
 
 impl Render for WorkspaceView {
   fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-    self.handle_pending_status_bar_notification(cx);
-    let auth_state = AuthStateStore::get(cx);
-
-    if matches!(auth_state, AuthState::Unknown) {
-      let theme = cx.theme().clone();
-      let version = format!("v{}", resolved_build_version(env!("CARGO_PKG_VERSION")));
-      return div()
-        .size_full()
-        .flex()
-        .flex_col()
-        .items_center()
-        .justify_center()
-        .gap_3()
-        .bg(theme.background)
-        .child(
-          img(reviu_logo_path(theme.mode.is_dark()))
-            .w(px(REVIU_WORDMARK_WIDTH_PX))
-            .h_auto(),
-        )
-        .child(
-          div()
-            .text_sm()
-            .text_color(theme.muted_foreground)
-            .child(version),
-        )
-        .child(Spinner::new().small())
-        .into_any_element();
-    }
-
     let show_onboarding = !PersistedSettings::get(cx).onboarding_done;
     let session_page = self.session_page.clone();
     let onboarding_page = self.onboarding_page.clone();
@@ -1351,9 +849,6 @@ impl Render for WorkspaceView {
       .flex_col()
       .key_context(key_context.as_str())
       .on_action(cx.listener(Self::quit_action))
-      .on_action(cx.listener(|_, _: &crate::OpenBillingPage, window, cx| {
-        open_billing_dialog(window, cx);
-      }))
       .on_action(cx.listener(|_, _: &crate::OpenGitConfigPage, window, cx| {
         open_git_config_dialog(window, cx);
       }))
@@ -1363,11 +858,6 @@ impl Render for WorkspaceView {
       .on_action(cx.listener(|_, _: &crate::OpenAboutPage, window, cx| {
         open_about_dialog(window, cx);
       }))
-      .on_action(
-        cx.listener(|_, _: &crate::OpenBrowserExtensions, window, cx| {
-          crate::browser_extensions_dialog::open_browser_extensions_dialog(window, cx);
-        }),
-      )
       .child(ui::scroll_dispatcher())
       .when(show_onboarding, |this| {
         this
@@ -1394,15 +884,10 @@ impl Focusable for WorkspaceView {
 
 #[cfg(test)]
 mod tests {
-  use super::{
-    WorkspaceApi, WorkspaceView, build_app_menus_with_subscription,
-    should_run_scheduled_update_check,
-  };
+  use super::{WorkspaceView, build_app_menus, should_run_scheduled_update_check};
   use crate::app_update::{
     AppUpdateState, AppUpdateStore, AvailableAppUpdate, ReadyToInstallAppUpdate, UpdateArtifact,
   };
-  use crate::auth_state::{AuthState, AuthStateStore};
-  use crate::github_notifications::GithubNotificationsStore;
   use crate::session_page::SessionPage;
   use crate::shortcuts::{self, ShortcutId};
   use crate::workspace_onboarding::WorkspaceOnboarding;
@@ -1439,11 +924,7 @@ mod tests {
     cx.update(|cx| {
       gpui_component::init(cx);
       cx.set_global(crate::config::AppSettings::default());
-      cx.set_global(WorkspaceApi::new());
-      cx.set_global(AuthStateStore::default());
-      AuthStateStore::set(cx, AuthState::Unauthenticated);
       cx.set_global(AppUpdateStore::default());
-      cx.set_global(GithubNotificationsStore::default());
       cx.set_global(shortcuts::ShortcutOverrides::default());
     });
 
@@ -1453,13 +934,9 @@ mod tests {
       WorkspaceView {
         session_page: page,
         onboarding_page,
-        window_handle: window.window_handle(),
         _config_watch_task: None,
         _update_check_task: None,
         _periodic_update_check_task: None,
-        _notification_poll_task: None,
-        #[cfg(any(target_os = "linux", target_os = "windows"))]
-        _status_bar_event_task: None,
         _subscriptions: Vec::new(),
       }
     });
@@ -1477,11 +954,7 @@ mod tests {
         onboarding_done: true,
         ..Default::default()
       });
-      cx.set_global(WorkspaceApi::new());
-      cx.set_global(AuthStateStore::default());
-      AuthStateStore::set(cx, AuthState::Unauthenticated);
       cx.set_global(AppUpdateStore::default());
-      cx.set_global(GithubNotificationsStore::default());
       cx.set_global(shortcuts::ShortcutOverrides::default());
     });
 
@@ -1493,13 +966,9 @@ mod tests {
       WorkspaceView {
         session_page: page,
         onboarding_page,
-        window_handle: window.window_handle(),
         _config_watch_task: None,
         _update_check_task: None,
         _periodic_update_check_task: None,
-        _notification_poll_task: None,
-        #[cfg(any(target_os = "linux", target_os = "windows"))]
-        _status_bar_event_task: None,
         _subscriptions: Vec::new(),
       }
     });
@@ -1534,11 +1003,7 @@ mod tests {
         onboarding_done: true,
         ..Default::default()
       });
-      cx.set_global(WorkspaceApi::new());
-      cx.set_global(AuthStateStore::default());
-      AuthStateStore::set(cx, AuthState::Unauthenticated);
       cx.set_global(AppUpdateStore::default());
-      cx.set_global(GithubNotificationsStore::default());
       cx.set_global(shortcuts::ShortcutOverrides::default());
     });
 
@@ -1550,13 +1015,9 @@ mod tests {
       WorkspaceView {
         session_page: page,
         onboarding_page,
-        window_handle: window.window_handle(),
         _config_watch_task: None,
         _update_check_task: None,
         _periodic_update_check_task: None,
-        _notification_poll_task: None,
-        #[cfg(any(target_os = "linux", target_os = "windows"))]
-        _status_bar_event_task: None,
         _subscriptions: Vec::new(),
       }
     });
@@ -1604,7 +1065,7 @@ mod tests {
 
   #[test]
   fn build_app_menus_include_file_actions_without_cluttering_the_app_menu() {
-    let menus = build_app_menus_with_subscription(false);
+    let menus = build_app_menus();
     let app_menu = menus
       .iter()
       .find(|menu| menu.name == "Reviu")
@@ -1612,14 +1073,7 @@ mod tests {
 
     assert_eq!(
       action_menu_item_names(app_menu),
-      vec![
-        "About Reviu",
-        "Settings...",
-        "Git Config...",
-        "Browser Extension...",
-        "Reviu Pro",
-        "Quit Reviu"
-      ]
+      vec!["About Reviu", "Settings...", "Git Config...", "Quit Reviu"]
     );
     let file_menu = menus
       .iter()
@@ -1633,27 +1087,6 @@ mod tests {
         "Save",
         "Save As...",
         "Close Tab"
-      ]
-    );
-  }
-
-  #[test]
-  fn build_app_menus_names_billing_for_subscribers() {
-    let menus = build_app_menus_with_subscription(true);
-    let app_menu = menus
-      .iter()
-      .find(|menu| menu.name == "Reviu")
-      .expect("app menu");
-
-    assert_eq!(
-      action_menu_item_names(app_menu),
-      vec![
-        "About Reviu",
-        "Settings...",
-        "Git Config...",
-        "Browser Extension...",
-        "Billing",
-        "Quit Reviu"
       ]
     );
   }
